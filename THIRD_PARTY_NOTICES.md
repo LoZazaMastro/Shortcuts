@@ -37,3 +37,11 @@ The custom icon picker uses SVG icons from Tabler Icons 3.46.0.
 
 Copyright (c) 2020-2026 Paweł Kuna
 Licensed under the MIT License. The full license text is included in `LICENSES/Tabler-Icons-MIT.txt`.
+
+## Cover photo
+
+The cover image in `assets/cover.jpg` is a photo by cottonbro studio from Pexels.
+
+Creator: https://www.pexels.com/@cottonbro/  
+Source: https://www.pexels.com/  
+Pexels license: https://www.pexels.com/license/

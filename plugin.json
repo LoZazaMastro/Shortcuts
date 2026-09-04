@@ -1,6 +1,9 @@
 {
   "name": "Shortcuts",
   "author": "LoZazaMastro",
+  "version": "1.0.0",
+  "repository": "https://github.com/LoZazaMastro/Shortcuts",
+  "homepage": "https://github.com/LoZazaMastro/Shortcuts",
   "flags": [],
   "api_version": 1,
   "publish": {
@@ -10,6 +13,8 @@
       "shortcuts",
       "plugins"
     ],
-    "description": "Adds selected Decky plugins as reorderable tabs in the Quick Access Menu."
+    "description": "Turn selected Decky plugins into independent, reorderable Quick Access Menu tabs.",
+    "image": "assets/cover.jpg",
+    "repository": "https://github.com/LoZazaMastro/Shortcuts"
   }
 }

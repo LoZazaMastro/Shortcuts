@@ -1,40 +1,14 @@
 import asyncio
 import json
 import os
+import re
 import time
 
 import decky
 
 
-ICON_IDS = {
-    "grid",
-    "star",
-    "bolt",
-    "gamepad",
-    "sliders",
-    "gear",
-    "music",
-    "play",
-    "cloud",
-    "download",
-    "folder",
-    "image",
-    "palette",
-    "monitor",
-    "wifi",
-    "battery",
-    "gauge",
-    "trophy",
-    "heart",
-    "bookmark",
-    "search",
-    "globe",
-    "terminal",
-    "wrench",
-    "shield",
-    "cube",
-    "layers",
-}
+ICON_ID_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+MAX_ICON_ID_LENGTH = 128
 
 
 class Plugin:
@@ -120,7 +94,13 @@ class Plugin:
                 continue
             name = raw_name.strip()
             icon = raw_icon.strip()
-            if name not in allowed or icon not in ICON_IDS or name in result:
+            if (
+                name not in allowed
+                or not icon
+                or len(icon) > MAX_ICON_ID_LENGTH
+                or ICON_ID_PATTERN.fullmatch(icon) is None
+                or name in result
+            ):
                 continue
             result[name] = icon
         return result

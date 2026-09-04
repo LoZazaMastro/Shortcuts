@@ -1,15 +1,32 @@
 {
   "name": "shortcuts",
   "version": "1.0.0",
-  "description": "Add selected Decky plugins as reorderable QAM tabs.",
+  "description": "Turn selected Decky plugins into independent, reorderable Quick Access Menu tabs.",
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
     "check": "node --check src/index.js && python -m py_compile main.py",
-    "test": "npm run build && node tests/runtime.mjs && node tests/empty.mjs && node tests/shared-adapter.mjs && node tests/hydration.mjs && node tests/unsupported.mjs && python tests/backend.py"
+    "test": "npm run build && node tests/runtime.mjs && node tests/empty.mjs && node tests/shared-adapter.mjs && node tests/hydration.mjs && node tests/unsupported.mjs && python tests/backend.py",
+    "package": "powershell -NoProfile -ExecutionPolicy Bypass -File ./package-win.ps1"
   },
   "author": "LoZazaMastro",
   "license": "GPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LoZazaMastro/Shortcuts.git"
+  },
+  "homepage": "https://github.com/LoZazaMastro/Shortcuts#readme",
+  "bugs": {
+    "url": "https://github.com/LoZazaMastro/Shortcuts/issues"
+  },
+  "keywords": [
+    "decky",
+    "steam",
+    "big-picture",
+    "quick-access-menu",
+    "shortcuts",
+    "qam"
+  ],
   "engines": {
     "node": ">=16.14.0"
   },

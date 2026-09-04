@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { pathToFileURL } from "node:url";
 
 class TabsHook {
     constructor() {
@@ -117,7 +116,7 @@ globalThis.window = {
 const rendered = [{ key: "native", decky: false }];
 hook.render(rendered, true);
 
-const moduleUrl = `${pathToFileURL(new URL("../dist/index.js", import.meta.url).pathname).href}?shared=${Date.now()}`;
+const moduleUrl = new URL(`../dist/index.js?shared=${Date.now()}`, import.meta.url).href;
 const pluginModule = await import(moduleUrl);
 const plugin = pluginModule.default();
 

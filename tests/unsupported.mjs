@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { pathToFileURL } from "node:url";
 
 const component = function Component() {};
 const createElement = (type, props, ...children) => ({
@@ -56,7 +55,7 @@ globalThis.window = {
     removeEventListener() {}
 };
 
-const moduleUrl = `${pathToFileURL(new URL("../dist/index.js", import.meta.url).pathname).href}?unsupported=${Date.now()}`;
+const moduleUrl = new URL(`../dist/index.js?unsupported=${Date.now()}`, import.meta.url).href;
 const pluginModule = await import(moduleUrl);
 const plugin = pluginModule.default();
 const runtime = plugin.content.props.runtime;

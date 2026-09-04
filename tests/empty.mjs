@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { pathToFileURL } from "node:url";
 
 class TabsHook {
     constructor() {
@@ -77,7 +76,7 @@ globalThis.window = {
     removeEventListener() {}
 };
 
-const moduleUrl = `${pathToFileURL(new URL("../dist/index.js", import.meta.url).pathname).href}?empty=${Date.now()}`;
+const moduleUrl = new URL(`../dist/index.js?empty=${Date.now()}`, import.meta.url).href;
 const pluginModule = await import(moduleUrl);
 const plugin = pluginModule.default();
 const runtime = plugin.content.props.runtime;

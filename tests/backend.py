@@ -20,19 +20,29 @@ async def run():
         assert initial == {"version": 2, "selected": [], "icons": {}, "updated_at": 0, "exists": False}
         saved = await plugin.save_state(
             ["Alpha", " Alpha ", "Shortcuts", 4, "Beta"],
-            {"Alpha": "star", "Beta": "grid", "Missing": "bolt", "Alpha ": "wrench", "Beta ": "bad"},
+            {
+                "Alpha": "brand-discord-outline",
+                "Beta": "circle-letter-a",
+                "Missing": "bolt",
+                "Alpha ": "wrench",
+                "Beta ": "bad/icon",
+            },
             123456,
         )
         assert saved == {
             "version": 2,
             "selected": ["Alpha", "Beta"],
-            "icons": {"Alpha": "star", "Beta": "grid"},
+            "icons": {"Alpha": "brand-discord-outline", "Beta": "circle-letter-a"},
             "updated_at": 123456,
             "exists": True,
         }
         loaded = await plugin.get_state()
         assert loaded == saved
         assert os.path.isfile(os.path.join(directory, "state.json"))
+
+        restarted = module.Plugin()
+        await restarted._main()
+        assert await restarted.get_state() == saved
 
 
 asyncio.run(run())

@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { pathToFileURL } from "node:url";
 
 class LocalStorage {
     constructor() {
@@ -114,7 +113,7 @@ globalThis.window = {
     }
 };
 
-const moduleUrl = `${pathToFileURL(new URL("../dist/index.js", import.meta.url).pathname).href}?test=${Date.now()}`;
+const moduleUrl = new URL(`../dist/index.js?test=${Date.now()}`, import.meta.url).href;
 const pluginModule = await import(moduleUrl);
 const plugin = pluginModule.default();
 const runtime = plugin.content.props.runtime;

@@ -1,44 +1,90 @@
+<div align="center">
+
 # Shortcuts
 
-Shortcuts adds selected Decky plugins as independent, reorderable tabs in the Quick Access Menu.
+### Your favourite Decky plugins, one tab away.
 
-**Author:** LoZazaMastro  
-**Version:** 1.0.0  
-**License:** GPL-3.0-only
+Turn the Decky panels you use most into independent, reorderable tabs in Steam's Quick Access Menu.
 
-## Features
+[![Release](https://img.shields.io/github/v/release/LoZazaMastro/Shortcuts?style=for-the-badge&label=Release&labelColor=111111&color=ffffff)](https://github.com/LoZazaMastro/Shortcuts/releases/latest)
+[![GPL-3.0 License](https://img.shields.io/badge/License-GPL--3.0-ffffff?style=for-the-badge&labelColor=111111)](LICENSE)
 
-- Adds any loaded Decky plugin with a QAM panel as a top-level QAM tab.
-- Keeps the original plugin entry inside Decky.
-- Reorders only tabs created by Shortcuts.
-- Removes a shortcut without disabling or uninstalling the original plugin.
-- Preserves entries for disabled or temporarily unavailable plugins and restores them automatically when they return.
-- Stores preferences in the Decky plugin settings directory, with a local browser cache for immediate startup.
-- Uses the original plugin title and panel at runtime without packaging third-party plugin code or assets.
-- Lets each active shortcut use the plugin's original icon or one of 59 bundled Tabler icons.
-- Detects Steam's interface language automatically and uses English as the fallback language.
+</div>
+
+![Shortcuts cover](assets/cover.jpg)
+
+## Put your plugins where you need them
+
+Shortcuts brings compatible Decky plugin panels directly into the main Quick Access Menu tab bar. Your original Decky entries stay untouched, while the panels you choose become immediately available beside Steam's native tabs.
+
+![A Gaming Mode plugin panel opened from its own Quick Access Menu tab](assets/screenshots/shortcuts-qam-tab.png)
+
+## Make the QAM yours
+
+- Add any loaded Decky plugin that exposes a QAM panel.
+- Reorder only the tabs created by Shortcuts.
+- Remove a shortcut without disabling or uninstalling its plugin.
+- Keep the original plugin entry available inside Decky.
+- Use the plugin's original icon or choose from the bundled Tabler icon library.
+- Restore saved shortcuts automatically when a disabled or temporarily unavailable plugin returns.
+- Follow Steam's interface language automatically, with English as the fallback.
+
+![Active shortcuts can be reordered, customised or removed](assets/screenshots/shortcuts-active-tabs.png)
+
+## Add and customise shortcuts
+
+Open Shortcuts in Decky and select a compatible plugin from the available list. Select an active plugin's name to choose its icon, then use the controls below it to change its position or remove the shortcut.
+
+![Compatible Decky plugins ready to be added](assets/screenshots/shortcuts-available-plugins.png)
+
+![Searchable controller-friendly icon picker](assets/screenshots/shortcuts-icon-picker.png)
+
+## Requirements
+
+- Steam in Big Picture mode.
+- [Decky Loader](https://decky.xyz) 3.x.
+- At least one other Decky plugin with a Quick Access Menu panel.
 
 ## Installation
 
-Extract or install the release archive so the resulting Decky plugin directory is named `Shortcuts` and contains `dist/index.js`, `main.py`, `plugin.json` and `package.json`.
+Install or update Shortcuts from the [Playhub Plugin Store](https://github.com/LoZazaMastro/Playhub), or install it manually:
 
-Open Decky, select Shortcuts, then add plugins from the available list. Active shortcuts are shown as cards. Select a plugin name to choose its QAM icon, or use the controls below it to move or remove the shortcut.
+1. Download the installer ZIP from the [latest release](https://github.com/LoZazaMastro/Shortcuts/releases/latest).
+2. Enable developer mode in Decky Loader.
+3. Open **Decky > Settings > Developer > Install Plugin from ZIP**.
+4. Select the downloaded archive.
 
 ## Development
 
-The frontend source is already deployable JavaScript and is copied to `dist/index.js` by the build script.
+The frontend source is deployable JavaScript and is copied to `dist/index.js` by the build script.
 
 ```bash
 npm run build
 npm test
 ```
 
-Shortcuts uses Decky's internal QAM tab registry because Decky does not expose a public API for creating independent top-level QAM tabs. The integration is guarded and leaves native tabs and tabs owned by other plugins untouched. A future Decky interface change may require an update.
+On Windows, create the installable archive and the complete project archive with:
 
-## Licensing
+```powershell
+.\package-win.ps1
+```
 
-Shortcuts is distributed under GPL-3.0-only. The source and the complete notices are included in the project and installer archives.
+Shortcuts uses Decky's internal QAM tab registry because Decky does not currently expose a public API for independent top-level tabs. The integration is guarded and leaves native tabs and tabs owned by other plugins untouched, but a future Decky update may require an adjustment.
 
-The QAM registration and render-reconciliation work is adapted from Panel de Control by Hooandee and contributors under GPL-3.0-only. The selected plugins themselves are not copied into Shortcuts: their already-loaded runtime elements are referenced from Decky and remain part of their own installations.
+## License and acknowledgements
 
-See `THIRD_PARTY_NOTICES.md` and `LICENSE` for details.
+Shortcuts is distributed under the [GPL-3.0-only license](LICENSE). Complete third-party notices are available in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+Special thanks to **Juan Diego MaLó ([Hooandee](https://github.com/Hooandee))** for discovering the method used to inject custom tabs into the Quick Access Menu. The QAM registration and render-reconciliation work is adapted from Panel de Control by Hooandee and contributors under GPL-3.0-only.
+
+The icon picker uses [Tabler Icons](https://tabler.io/icons), released under the MIT License. Thank you to the Tabler team and contributors for making such a broad, consistent icon set available. The license notice is included in [LICENSES/Tabler-Icons-MIT.txt](LICENSES/Tabler-Icons-MIT.txt).
+
+Cover photo by [cottonbro studio](https://www.pexels.com/@cottonbro/) from [Pexels](https://www.pexels.com/).
+
+Shortcuts does not package code or assets from the plugins it exposes. It references their already-loaded runtime panels, which remain part of their own installations.
+
+<div align="center">
+
+Created and maintained by **[LoZazaMastro](https://github.com/LoZazaMastro)**.
+
+</div>
