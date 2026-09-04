@@ -1,0 +1,15 @@
+{
+  "name": "Shortcuts",
+  "author": "LoZazaMastro",
+  "flags": [],
+  "api_version": 1,
+  "publish": {
+    "tags": [
+      "utility",
+      "qam",
+      "shortcuts",
+      "plugins"
+    ],
+    "description": "Adds selected Decky plugins as reorderable tabs in the Quick Access Menu."
+  }
+}

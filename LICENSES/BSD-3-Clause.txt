@@ -1,0 +1,1 @@
+The complete Decky Plugin Template BSD 3-Clause license text is included in the root LICENSE file and THIRD_PARTY_NOTICES.md.

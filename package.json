@@ -1,0 +1,17 @@
+{
+  "name": "shortcuts",
+  "version": "1.0.0",
+  "description": "Add selected Decky plugins as reorderable QAM tabs.",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "node --check src/index.js && python -m py_compile main.py",
+    "test": "npm run build && node tests/runtime.mjs && node tests/empty.mjs && node tests/shared-adapter.mjs && node tests/hydration.mjs && node tests/unsupported.mjs && python tests/backend.py"
+  },
+  "author": "LoZazaMastro",
+  "license": "GPL-3.0-only",
+  "engines": {
+    "node": ">=16.14.0"
+  },
+  "packageManager": "pnpm@9.15.9"
+}
