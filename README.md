@@ -21,13 +21,10 @@ Shortcuts brings compatible Decky plugin panels directly into the main Quick Acc
 
 ## Make the QAM yours
 
-- Add any loaded Decky plugin that exposes a QAM panel.
-- Reorder only the tabs created by Shortcuts.
-- Remove a shortcut without disabling or uninstalling its plugin.
-- Keep the original plugin entry available inside Decky.
+- Add any loaded Decky plugin.
+- Reorder the tabs created by Shortcuts.
+- Remove a shortcut.
 - Use the plugin's original icon or choose from the bundled Tabler icon library.
-- Restore saved shortcuts automatically when a disabled or temporarily unavailable plugin returns.
-- Follow Steam's interface language automatically, with English as the fallback.
 
 ![Active shortcuts can be reordered, customised or removed](assets/screenshots/shortcuts-active-tabs.png)
 
