@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.0 - 2026-09-07
+
+- Added one controller-friendly list for reordering Steam's native tabs, Decky's tab, compatible custom tabs and plugin shortcuts.
+- Applied tab changes immediately from QAM renders, Decky events and user actions, with a slower background check used only as a fallback.
+- Preserved live tab and panel instances while reordering to avoid unnecessary remounts and reduce latency.
+- Added durable full-layout persistence with automatic migration from 1.0.x settings and recovery from the last valid backup.
+- Added stricter compatibility checks and transactional cleanup so unexpected Steam or Decky changes leave the original QAM untouched.
+
+## 1.0.1 - 2026-09-04
+
+- Fixed custom tab icons reverting to the original plugin icons after restarting Shortcuts or Steam.
+
 ## 1.0.0 — 2026-09-04
 
 - Initial release.

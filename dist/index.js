@@ -13,6 +13,14 @@ const PDC_OWNER = "panel-de-control";
 const SHARED_ADAPTER = Symbol.for("panel-de-control.qam-render-adapter");
 const SHARED_ADAPTER_PROTOCOL = 2;
 const SHORTCUTS_ADAPTER_OWNER = Symbol.for("shortcuts.qam-render-adapter.owner");
+const TAB_LAYOUT_ADAPTER = Symbol.for("shortcuts.qam-tab-layout-adapter");
+const STEAM_TAB_PREFIX = "steam:";
+const DECKY_TAB_PREFIX = "decky:";
+const SHORTCUT_TAB_PREFIX = "shortcut:";
+const STATE_VERSION = 3;
+const FALLBACK_REFRESH_MS = 15000;
+const STARTUP_RETRY_DELAYS = [100, 350, 800, 1600, 3000];
+const MOUNTED_QAM_SCAN_LIMIT = 12000;
 const RETAINED_TAB_CHECK_MS = 100;
 
 const ICON_ALIASES = {
@@ -576,6 +584,30 @@ const TEXT = {
         back: "Tilbake",
         selectIcon: "Bruk ikonet {icon}"
     }
+};
+
+const NATIVE_TAB_LABELS = {
+    en: ["Notifications", "Remote Play Together", "Voice Chat", "Friends", "Settings", "Performance", "Help", "Music", "Decky"],
+    it: ["Notifiche", "Remote Play Together", "Chat vocale", "Amici", "Impostazioni", "Prestazioni", "Aiuto", "Musica", "Decky"],
+    de: ["Benachrichtigungen", "Remote Play Together", "Sprachchat", "Freunde", "Einstellungen", "Leistung", "Hilfe", "Musik", "Decky"],
+    fr: ["Notifications", "Remote Play Together", "Chat vocal", "Amis", "Paramètres", "Performances", "Aide", "Musique", "Decky"],
+    es: ["Notificaciones", "Remote Play Together", "Chat de voz", "Amigos", "Ajustes", "Rendimiento", "Ayuda", "Música", "Decky"],
+    "pt-BR": ["Notificações", "Remote Play Together", "Chat de voz", "Amigos", "Configurações", "Desempenho", "Ajuda", "Música", "Decky"],
+    pt: ["Notificações", "Remote Play Together", "Conversa de voz", "Amigos", "Definições", "Desempenho", "Ajuda", "Música", "Decky"],
+    ru: ["Уведомления", "Remote Play Together", "Голосовой чат", "Друзья", "Настройки", "Производительность", "Справка", "Музыка", "Decky"],
+    pl: ["Powiadomienia", "Remote Play Together", "Czat głosowy", "Znajomi", "Ustawienia", "Wydajność", "Pomoc", "Muzyka", "Decky"],
+    tr: ["Bildirimler", "Remote Play Together", "Sesli sohbet", "Arkadaşlar", "Ayarlar", "Performans", "Yardım", "Müzik", "Decky"],
+    uk: ["Сповіщення", "Remote Play Together", "Голосовий чат", "Друзі", "Налаштування", "Продуктивність", "Довідка", "Музика", "Decky"],
+    ja: ["通知", "Remote Play Together", "ボイスチャット", "フレンド", "設定", "パフォーマンス", "ヘルプ", "音楽", "Decky"],
+    ko: ["알림", "Remote Play Together", "음성 채팅", "친구", "설정", "성능", "도움말", "음악", "Decky"],
+    "zh-CN": ["通知", "Remote Play Together", "语音聊天", "好友", "设置", "性能", "帮助", "音乐", "Decky"],
+    "zh-TW": ["通知", "Remote Play Together", "語音聊天", "好友", "設定", "效能", "說明", "音樂", "Decky"],
+    nl: ["Meldingen", "Remote Play Together", "Spraakchat", "Vrienden", "Instellingen", "Prestaties", "Help", "Muziek", "Decky"],
+    cs: ["Oznámení", "Remote Play Together", "Hlasový chat", "Přátelé", "Nastavení", "Výkon", "Nápověda", "Hudba", "Decky"],
+    sv: ["Aviseringar", "Remote Play Together", "Röstchatt", "Vänner", "Inställningar", "Prestanda", "Hjälp", "Musik", "Decky"],
+    fi: ["Ilmoitukset", "Remote Play Together", "Äänikeskustelu", "Kaverit", "Asetukset", "Suorituskyky", "Ohje", "Musiikki", "Decky"],
+    da: ["Notifikationer", "Remote Play Together", "Stemmechat", "Venner", "Indstillinger", "Ydeevne", "Hjælp", "Musik", "Decky"],
+    no: ["Varsler", "Remote Play Together", "Talechat", "Venner", "Innstillinger", "Ytelse", "Hjelp", "Musikk", "Decky"]
 };
 
 const CATEGORY_TEXT = {
@@ -1152,6 +1184,26 @@ function text(key, values = {}) {
     return value;
 }
 
+function nativeTabLabel(rawKey) {
+    const index = String(rawKey) === String(DECKY_TAB_ID) ? 8 : Number(rawKey);
+    const labels = NATIVE_TAB_LABELS[currentLanguage()] ?? NATIVE_TAB_LABELS.en;
+    return Number.isInteger(index) && index >= 0 && index < labels.length
+        ? labels[index]
+        : `Steam ${String(rawKey)}`;
+}
+
+function readableElementText(value, depth = 0) {
+    if (depth > 8 || value == null || typeof value === "boolean") return "";
+    if (typeof value === "string" || typeof value === "number") return String(value).trim();
+    if (Array.isArray(value)) {
+        return value.map((entry) => readableElementText(entry, depth + 1)).filter(Boolean).join(" ").trim();
+    }
+    if (typeof value === "object") {
+        return readableElementText(value.props?.children, depth + 1);
+    }
+    return "";
+}
+
 function normalizeNames(value) {
     if (!Array.isArray(value)) return [];
     const result = [];
@@ -1181,25 +1233,49 @@ function normalizeIcons(value, selected = null) {
     return result;
 }
 
+function normalizeTabOrder(value) {
+    if (!Array.isArray(value)) return [];
+    const result = [];
+    const seen = new Set();
+    for (const entry of value) {
+        if (typeof entry !== "string") continue;
+        const key = entry.trim();
+        if (
+            !key
+            || key.length > 384
+            || ![STEAM_TAB_PREFIX, DECKY_TAB_PREFIX, SHORTCUT_TAB_PREFIX].some((prefix) => key.startsWith(prefix))
+            || !key.includes(":")
+            || !key.slice(key.indexOf(":") + 1)
+            || seen.has(key)
+        ) {
+            continue;
+        }
+        seen.add(key);
+        result.push(key);
+    }
+    return result;
+}
+
 function readLocalPreferences() {
     try {
         const parsed = JSON.parse(globalThis.localStorage?.getItem(STORAGE_KEY) ?? "null");
         const selected = normalizeNames(Array.isArray(parsed) ? parsed : parsed?.selected);
         const icons = normalizeIcons(parsed?.icons, selected);
+        const order = normalizeTabOrder(parsed?.order);
         const updatedAt = Number.isFinite(Number(parsed?.updatedAt))
             ? Math.max(0, Number(parsed.updatedAt))
             : 0;
-        return { selected, icons, updatedAt };
+        return { selected, icons, order, updatedAt };
     } catch {
-        return { selected: [], icons: {}, updatedAt: 0 };
+        return { selected: [], icons: {}, order: [], updatedAt: 0 };
     }
 }
 
-function writeLocalPreferences(selected, icons, updatedAt) {
+function writeLocalPreferences(selected, icons, order, updatedAt) {
     try {
         globalThis.localStorage?.setItem(
             STORAGE_KEY,
-            JSON.stringify({ version: 2, selected, icons, updatedAt })
+            JSON.stringify({ version: STATE_VERSION, selected, icons, order, updatedAt })
         );
     } catch {}
 }
@@ -7526,10 +7602,19 @@ function overlapsHorizontally(rect, bounds) {
 }
 
 function QamPanelGate({ children, onVisible }) {
+    const visibilityHook = backend?.useQuickAccessVisible;
+    let providedVisibility = null;
+    if (typeof visibilityHook === "function") {
+        try {
+            providedVisibility = Boolean(visibilityHook());
+        } catch {}
+    }
+    const hasProvidedVisibility = providedVisibility !== null;
     const hostRef = React.useRef(null);
     const [mode, setMode] = React.useState("hidden");
 
     React.useLayoutEffect(() => {
+        if (hasProvidedVisibility) return undefined;
         const host = hostRef.current;
         const doc = host?.ownerDocument;
         if (!host || !doc) {
@@ -7669,16 +7754,20 @@ function QamPanelGate({ children, onVisible }) {
         }
 
         return teardown;
-    }, []);
+    }, [hasProvidedVisibility]);
+
+    const visible = hasProvidedVisibility
+        ? providedVisibility
+        : mode === "content" || mode === "fallback";
 
     React.useEffect(() => {
-        if (mode === "content" || mode === "fallback") onVisible?.();
-    }, [mode, onVisible]);
+        if (visible) onVisible?.();
+    }, [visible, onVisible]);
 
     return h(
         "div",
         { ref: hostRef, style: { minHeight: 1, width: "100%" } },
-        mode === "content" || mode === "fallback" ? children : null
+        visible ? children : null
     );
 }
 
@@ -7825,6 +7914,314 @@ function preservesStableRenderedTabs(renderer, hook) {
         && stableTabs.every((tab, index) => tab === stableReferences[index]);
 }
 
+function shortcutTabKey(name) {
+    return `${SHORTCUT_TAB_PREFIX}${name}`;
+}
+
+function registryTabKey(tab) {
+    if (isOwnedTab(tab)) {
+        const name = tab?.[PLUGIN_FIELD];
+        return typeof name === "string" && name ? shortcutTabKey(name) : null;
+    }
+    return tab?.id == null ? null : `${DECKY_TAB_PREFIX}${String(tab.id)}`;
+}
+
+function renderedTabRecord(hook, tab) {
+    if (!tab || tab.key == null) return null;
+    if (tab.decky !== true) {
+        const rawKey = String(tab.key);
+        return {
+            key: `${STEAM_TAB_PREFIX}${rawKey}`,
+            kind: "steam",
+            name: nativeTabLabel(rawKey),
+            icon: tab.tab ?? null,
+            source: tab,
+            available: true,
+            disabled: false
+        };
+    }
+
+    const registryTab = hook.tabs.find((entry) => String(entry?.id) === String(tab.key));
+    if (!registryTab) return null;
+    const key = registryTabKey(registryTab);
+    if (!key) return null;
+    const owned = isOwnedTab(registryTab);
+    const pluginName = owned ? registryTab[PLUGIN_FIELD] : null;
+    const fallbackName = String(registryTab.id) === String(DECKY_TAB_ID)
+        ? nativeTabLabel(DECKY_TAB_ID)
+        : registryTab?.owner === PDC_OWNER || registryTab?.__pdcOwner === PDC_OWNER
+            ? "Panel de Control"
+            : `Decky ${String(registryTab.id)}`;
+    return {
+        key,
+        kind: owned ? "shortcut" : "decky",
+        name: pluginName || readableElementText(registryTab.title) || fallbackName,
+        pluginName,
+        icon: registryTab.icon ?? tab.tab ?? null,
+        source: tab,
+        registryTab,
+        available: true,
+        disabled: false
+    };
+}
+
+function sameTabRecords(left, right) {
+    return left.length === right.length && left.every((entry, index) => (
+        entry.key === right[index].key
+        && entry.name === right[index].name
+        && entry.icon === right[index].icon
+        && entry.source === right[index].source
+        && entry.registryTab === right[index].registryTab
+    ));
+}
+
+function notifyTabLayout(layout) {
+    if (layout.notificationPending) return;
+    layout.notificationPending = true;
+    const dispatch = () => {
+        layout.notificationPending = false;
+        for (const listener of layout.listeners) {
+            try {
+                listener();
+            } catch {}
+        }
+    };
+    if (typeof globalThis.queueMicrotask === "function") globalThis.queueMicrotask(dispatch);
+    else Promise.resolve().then(dispatch);
+}
+
+function setTabLayoutDetail(layout, detail) {
+    if (layout.detail === detail) return false;
+    layout.detail = detail;
+    notifyTabLayout(layout);
+    return true;
+}
+
+function reconcileTabLayout(layout, tabs, visible = false) {
+    if (!Array.isArray(tabs)) return false;
+    if (!layout.baselines.has(tabs)) layout.baselines.set(tabs, [...tabs]);
+
+    const records = tabs.map((tab) => renderedTabRecord(layout.hook, tab));
+    if (records.some((record) => !record)) {
+        setTabLayoutDetail(layout, "unrecognized_tab_shape");
+        return false;
+    }
+    const recordByKey = new Map(records.map((record) => [record.key, record]));
+    if (recordByKey.size !== records.length) {
+        setTabLayoutDetail(layout, "duplicate_tab_keys");
+        return false;
+    }
+
+    const desiredKeys = [];
+    const included = new Set();
+    for (const key of layout.order) {
+        if (!recordByKey.has(key) || included.has(key)) continue;
+        included.add(key);
+        desiredKeys.push(key);
+    }
+    for (const record of records) {
+        if (included.has(record.key)) continue;
+        included.add(record.key);
+        desiredKeys.push(record.key);
+    }
+    const desiredTabs = desiredKeys.map((key) => recordByKey.get(key).source);
+    const changed = !sameTabSequence(tabs, desiredTabs);
+    if (changed) {
+        const before = [...tabs];
+        try {
+            tabs.splice(0, tabs.length, ...desiredTabs);
+        } catch {
+            setTabLayoutDetail(layout, "layout_write_failed");
+            return false;
+        }
+        if (!sameTabSequence(tabs, desiredTabs)) {
+            try {
+                tabs.splice(0, tabs.length, ...before);
+            } catch {}
+            setTabLayoutDetail(layout, "layout_verification_failed");
+            return false;
+        }
+    }
+
+    const orderedRecords = desiredKeys.map((key) => recordByKey.get(key));
+    layout.arrayRecords.set(tabs, orderedRecords);
+    layout.visibility.set(tabs, visible === true);
+
+    const activeArray = layout.activeArrayRef?.deref?.() ?? null;
+    const activeObserved = activeArray
+        ? layout.state.observedArrays.some((reference) => reference.deref() === activeArray)
+        : false;
+    const selectForSnapshot = !activeArray
+        || activeArray === tabs
+        || visible === true
+        || !activeObserved;
+    const snapshotChanged = selectForSnapshot && !sameTabRecords(layout.records, orderedRecords);
+    if (selectForSnapshot) {
+        layout.activeArrayRef = new globalThis.WeakRef(tabs);
+        layout.records = orderedRecords;
+    }
+    const detailChanged = layout.detail !== "active";
+    layout.detail = "active";
+    if (snapshotChanged || detailChanged) notifyTabLayout(layout);
+    return true;
+}
+
+function restoreObservedTabLayouts(layout) {
+    if (!layout) return;
+    const references = Array.isArray(layout.state.observedArrays) ? layout.state.observedArrays : [];
+    for (const reference of references) {
+        const tabs = reference?.deref?.();
+        const baseline = tabs ? layout.baselines.get(tabs) : null;
+        if (!tabs || !baseline) continue;
+        const current = new Set(tabs);
+        const restored = baseline.filter((tab) => current.has(tab));
+        for (const tab of tabs) {
+            if (!restored.includes(tab)) restored.push(tab);
+        }
+        if (!sameTabSequence(tabs, restored)) {
+            try {
+                tabs.splice(0, tabs.length, ...restored);
+            } catch {}
+        }
+    }
+}
+
+function tabLayoutState(state) {
+    const layout = state?.[TAB_LAYOUT_ADAPTER];
+    return layout?.state === state
+        && layout.hook === state.hook
+        && state.wrapper === layout.wrapper
+        && state.hook.render === layout.wrapper
+        ? layout
+        : null;
+}
+
+function installTabLayout(state) {
+    const existing = tabLayoutState(state);
+    if (existing) return existing;
+    if (!state || state.protocol !== SHARED_ADAPTER_PROTOCOL || state.hook?.render !== state.wrapper) return null;
+    if (Object.prototype.hasOwnProperty.call(state, TAB_LAYOUT_ADAPTER)) return null;
+
+    const previous = state.wrapper;
+    const layout = {
+        state,
+        hook: state.hook,
+        previous,
+        wrapper: null,
+        order: [],
+        records: [],
+        detail: "waiting_for_render",
+        listeners: new Set(),
+        baselines: new WeakMap(),
+        arrayRecords: new WeakMap(),
+        visibility: new WeakMap(),
+        activeArrayRef: null,
+        notificationPending: false
+    };
+    layout.wrapper = function (tabs, visible) {
+        const result = previous.call(this, tabs, visible);
+        if (state.failure) setTabLayoutDetail(layout, `adapter_${state.failure}`);
+        else if (synchronous(result)) reconcileTabLayout(layout, tabs, visible);
+        else setTabLayoutDetail(layout, "async_renderer");
+        return result;
+    };
+
+    try {
+        Object.defineProperty(state, TAB_LAYOUT_ADAPTER, { configurable: true, value: layout });
+        state.wrapper = layout.wrapper;
+        state.hook.render = layout.wrapper;
+        return tabLayoutState(state);
+    } catch {
+        try {
+            state.wrapper = previous;
+            state.hook.render = previous;
+            delete state[TAB_LAYOUT_ADAPTER];
+        } catch {}
+        return null;
+    }
+}
+
+function detachTabLayout(layout, restore = true) {
+    if (!layout) return;
+    if (restore) restoreObservedTabLayouts(layout);
+    const { state, hook, previous } = layout;
+    try {
+        if (hook.render === layout.wrapper && state.wrapper === layout.wrapper) {
+            state.wrapper = previous;
+            hook.render = previous;
+        }
+        if (state[TAB_LAYOUT_ADAPTER] === layout) delete state[TAB_LAYOUT_ADAPTER];
+    } catch {}
+    layout.listeners.clear();
+    layout.records = [];
+    layout.activeArrayRef = null;
+}
+
+function setTabLayoutOrder(layout, order) {
+    if (!layout) return;
+    const normalized = normalizeTabOrder(order);
+    if (JSON.stringify(normalized) === JSON.stringify(layout.order)) return;
+    layout.order = normalized;
+}
+
+function orderedRegistryTabs(tabs, order) {
+    const byKey = new Map();
+    for (const tab of tabs) {
+        const key = registryTabKey(tab);
+        if (key && !byKey.has(key)) byKey.set(key, tab);
+    }
+    const result = [];
+    const seen = new Set();
+    for (const key of order) {
+        const tab = byKey.get(key);
+        if (!tab || seen.has(key)) continue;
+        seen.add(key);
+        result.push(tab);
+    }
+    for (const tab of tabs) {
+        const key = registryTabKey(tab);
+        if (!key) {
+            result.push(tab);
+            continue;
+        }
+        if (seen.has(key)) continue;
+        seen.add(key);
+        result.push(tab);
+    }
+    return result;
+}
+
+function originalRegistryOrder(state, tabs) {
+    const byId = new Map(tabs.map((tab) => [String(tab.id), tab]));
+    const result = [];
+    const seen = new Set();
+    for (const entry of state?.initialRegistry ?? []) {
+        const id = String(entry.id);
+        const tab = byId.get(id);
+        if (!tab || seen.has(id)) continue;
+        seen.add(id);
+        result.push(tab);
+    }
+    for (const tab of tabs) {
+        const id = String(tab.id);
+        if (seen.has(id)) continue;
+        seen.add(id);
+        result.push(tab);
+    }
+    return result;
+}
+
+function mergeRenderedDeckyTabs(existingTabs, desiredDeckyTabs) {
+    const result = [];
+    let deckyIndex = 0;
+    for (const tab of existingTabs) {
+        if (tab.decky !== true) result.push(tab);
+        else if (deckyIndex < desiredDeckyTabs.length) result.push(desiredDeckyTabs[deckyIndex++]);
+    }
+    while (deckyIndex < desiredDeckyTabs.length) result.push(desiredDeckyTabs[deckyIndex++]);
+    return result;
+}
+
 function renderAdapterState(hook) {
     const state = hook[SHARED_ADAPTER];
     return state?.protocol === SHARED_ADAPTER_PROTOCOL
@@ -7913,7 +8310,6 @@ function reconcileAdaptedRender(state, existingTabs, visible) {
     }
 
     const before = [...existingTabs];
-    const nativeTabs = before.filter((tab) => tab.decky !== true);
     const deckyTabs = renderedDeckyTabs(before);
     const previousRegistry = previousRegistryForArray(state, existingTabs, registry);
     if (
@@ -7947,7 +8343,7 @@ function reconcileAdaptedRender(state, existingTabs, visible) {
         }
         return generated[index];
     });
-    const desiredTabs = [...nativeTabs, ...desiredDeckyTabs];
+    const desiredTabs = mergeRenderedDeckyTabs(before, desiredDeckyTabs);
     if (
         existingTabs.length !== desiredTabs.length
         || existingTabs.some((tab, index) => tab !== desiredTabs[index])
@@ -8067,6 +8463,79 @@ function refreshObservedQam(state) {
     return !state.failure;
 }
 
+function isMountedQamTabs(state, tabs) {
+    if (!Array.isArray(tabs) || tabs.length === 0 || Object.isFrozen(tabs)) return false;
+    if (!tabs.every((tab) => tab && typeof tab === "object" && tab.key != null)) return false;
+    const keys = tabs.map((tab) => String(tab.key));
+    if (new Set(keys).size !== keys.length) return false;
+    const deckyTabs = renderedDeckyTabs(tabs);
+    if (
+        deckyTabs.length === 0
+        || !deckyTabs.some((tab) => String(tab.key) === String(DECKY_TAB_ID))
+        || deckyTabs.some((tab) => tab.panel == null)
+        || !tabs.some((tab) => tab.decky !== true)
+    ) {
+        return false;
+    }
+    const registry = snapshotTabRegistry(state.hook.tabs);
+    return uniqueRegistryIds(registry) && previousRegistryForArray(state, tabs, registry) !== null;
+}
+
+function mountedQamTabArrays(state) {
+    const doc = globalThis.document;
+    const getReactRoot = DFL?.getReactRoot;
+    const rootElement = doc?.getElementById?.("root");
+    if (!rootElement || typeof getReactRoot !== "function") return [];
+
+    let root = null;
+    try {
+        root = getReactRoot(rootElement);
+    } catch {
+        return [];
+    }
+    const first = root?.current ?? root;
+    if (!first || typeof first !== "object") return [];
+
+    const stack = [first];
+    const visited = new Set();
+    const arrays = new Set();
+    while (stack.length > 0 && visited.size < MOUNTED_QAM_SCAN_LIMIT) {
+        const node = stack.pop();
+        if (!node || typeof node !== "object" || visited.has(node)) continue;
+        visited.add(node);
+        for (const slot of ["memoizedProps", "pendingProps"]) {
+            const tabs = node?.[slot]?.tabs;
+            if (!arrays.has(tabs) && isMountedQamTabs(state, tabs)) arrays.add(tabs);
+        }
+        if (node.sibling) stack.push(node.sibling);
+        if (node.child) stack.push(node.child);
+    }
+    return [...arrays];
+}
+
+function discoverMountedQam(state) {
+    if (!state || state.failure || state.hook.render !== state.wrapper) return 0;
+    const observed = new Set(
+        state.observedArrays
+            .map((reference) => reference.deref())
+            .filter(Boolean)
+    );
+    let discovered = 0;
+    for (const tabs of mountedQamTabArrays(state)) {
+        if (observed.has(tabs)) continue;
+        const visible = renderedDeckyTabs(tabs).some((tab) => tab.initialVisibility === true);
+        try {
+            state.wrapper.call(state.hook, tabs, visible);
+        } catch {
+            continue;
+        }
+        if (state.failure) break;
+        observed.add(tabs);
+        discovered += 1;
+    }
+    return discovered;
+}
+
 function sameTabSequence(actual, desired) {
     return actual.length === desired.length && actual.every((tab, index) => tab === desired[index]);
 }
@@ -8082,15 +8551,15 @@ function ownedPluginNames(tabs) {
         .filter((name) => typeof name === "string");
 }
 
-function applyOwnedTabs(ownedTabs) {
+function applyOwnedTabs(ownedTabs, order = [], onLayoutChange = null) {
     const hook = hookOf();
     if (!hook) {
-        return { status: "waiting", applied: [], observed: false, detail: "hook_unavailable" };
+        return { status: "waiting", applied: [], observed: false, detail: "hook_unavailable", tabs: [] };
     }
 
     const current = hook.tabs;
     const foreign = current.filter((tab) => !isOwnedTab(tab));
-    const desired = [...foreign, ...ownedTabs];
+    const desired = orderedRegistryTabs([...foreign, ...ownedTabs], order);
     const requiresAdapter = true;
     let state = renderAdapterState(hook);
 
@@ -8101,7 +8570,8 @@ function applyOwnedTabs(ownedTabs) {
                 status: "unsupported",
                 applied: ownedPluginNames(current),
                 observed: false,
-                detail: "adapter_unavailable"
+                detail: "adapter_unavailable",
+                tabs: []
             };
         }
         if (state.failure) {
@@ -8109,10 +8579,24 @@ function applyOwnedTabs(ownedTabs) {
                 status: "failed",
                 applied: ownedPluginNames(current),
                 observed: state.observedArrays.length > 0,
-                detail: state.failure
+                detail: state.failure,
+                tabs: []
             };
         }
     }
+
+    const layout = installTabLayout(state);
+    if (!layout) {
+        return {
+            status: "unsupported",
+            applied: ownedPluginNames(current),
+            observed: Boolean(state?.observedArrays.length),
+            detail: "layout_adapter_unavailable",
+            tabs: []
+        };
+    }
+    if (typeof onLayoutChange === "function") layout.listeners.add(onLayoutChange);
+    setTabLayoutOrder(layout, order);
 
     if (!sameTabSequence(current, desired)) {
         const desiredRegistry = snapshotTabRegistry(desired);
@@ -8121,7 +8605,8 @@ function applyOwnedTabs(ownedTabs) {
                 status: "failed",
                 applied: ownedPluginNames(current),
                 observed: Boolean(state?.observedArrays.length),
-                detail: "duplicate_ids"
+                detail: "duplicate_ids",
+                tabs: [...layout.records]
             };
         }
         if (!generateRenderedRegistry(state.original, hook, desiredRegistry, false)) {
@@ -8129,7 +8614,8 @@ function applyOwnedTabs(ownedTabs) {
                 status: "unsupported",
                 applied: ownedPluginNames(current),
                 observed: Boolean(state.observedArrays.length),
-                detail: "renderer_probe_failed"
+                detail: "renderer_probe_failed",
+                tabs: [...layout.records]
             };
         }
         const previous = current;
@@ -8140,7 +8626,8 @@ function applyOwnedTabs(ownedTabs) {
                 status: "failed",
                 applied: ownedPluginNames(current),
                 observed: Boolean(state.observedArrays.length),
-                detail: "registry_write_failed"
+                detail: "registry_write_failed",
+                tabs: [...layout.records]
             };
         }
         if (!matchesHookRegistry(hook, desiredRegistry)) {
@@ -8151,48 +8638,71 @@ function applyOwnedTabs(ownedTabs) {
                 status: "failed",
                 applied: ownedPluginNames(hook.tabs),
                 observed: Boolean(state.observedArrays.length),
-                detail: "registry_mismatch"
+                detail: "registry_mismatch",
+                tabs: [...layout.records]
             };
         }
     }
 
+    if (state?.observedArrays.length === 0) discoverMountedQam(state);
     if (state && !refreshObservedQam(state)) {
         return {
             status: "failed",
             applied: ownedPluginNames(hook.tabs),
             observed: state.observedArrays.length > 0,
-            detail: state.failure ?? "render_failed"
+            detail: state.failure ?? "render_failed",
+            tabs: [...layout.records]
         };
     }
 
     const observed = Boolean(state?.observedArrays.length);
+    const layoutHealthy = layout.detail === "active" || layout.detail === "waiting_for_render";
     return {
-        status: observed || ownedTabs.length === 0 ? "active" : "pending",
+        status: !layoutHealthy ? "unsupported" : observed || ownedTabs.length === 0 ? "active" : "pending",
         applied: ownedPluginNames(hook.tabs),
         observed,
-        detail: observed ? "applied" : "waiting_for_render"
+        detail: !layoutHealthy ? layout.detail : observed ? "applied" : "waiting_for_render",
+        tabs: [...layout.records]
     };
 }
 
-function cleanupOwnedTabs() {
-    const hook = hookOf();
+function cleanupOwnedTabs(targetHook = null) {
+    const hook = targetHook ?? hookOf();
     if (!hook) return;
     const state = renderAdapterState(hook);
-    if (!state || state.failure) return;
+    const layout = state ? tabLayoutState(state) : null;
+    const ownedIds = new Set(hook.tabs.filter(isOwnedTab).map((tab) => String(tab.id)));
+    detachTabLayout(layout, false);
     let remaining = hook.tabs;
-    if (hook.tabs.some(isOwnedTab)) {
-        remaining = hook.tabs.filter((tab) => !isOwnedTab(tab));
-        const desiredRegistry = snapshotTabRegistry(remaining);
-        if (!generateRenderedRegistry(state.original, hook, desiredRegistry, false)) return;
-        try {
-            hook.tabs = remaining;
-        } catch {
-            return;
+    try {
+        if (hook.tabs.some(isOwnedTab)) {
+            remaining = originalRegistryOrder(state, hook.tabs.filter((tab) => !isOwnedTab(tab)));
+            const desiredRegistry = snapshotTabRegistry(remaining);
+            if (state && !state.failure && !generateRenderedRegistry(state.original, hook, desiredRegistry, false)) return;
+            try {
+                hook.tabs = remaining;
+            } catch {
+                return;
+            }
+            if (state && !state.failure) refreshObservedQam(state);
+            else if (state && ownedIds.size > 0) {
+                for (const reference of state.observedArrays ?? []) {
+                    const tabs = reference?.deref?.();
+                    if (!tabs) continue;
+                    const cleaned = tabs.filter((tab) => !(tab?.decky === true && ownedIds.has(String(tab.key))));
+                    if (!sameTabSequence(tabs, cleaned)) {
+                        try {
+                            tabs.splice(0, tabs.length, ...cleaned);
+                        } catch {}
+                    }
+                }
+            }
         }
-        refreshObservedQam(state);
+    } finally {
+        restoreObservedTabLayouts(layout);
     }
     const foreignCustomTabs = remaining.filter((tab) => tab.id !== DECKY_TAB_ID);
-    if (state[SHORTCUTS_ADAPTER_OWNER] === true && foreignCustomTabs.length === 0 && !state.failure) {
+    if (state?.[SHORTCUTS_ADAPTER_OWNER] === true && foreignCustomTabs.length === 0 && !state.failure) {
         restoreRenderAdapter(state);
     }
 }
@@ -8277,10 +8787,12 @@ class ShortcutsRuntime {
         const localPreferences = readLocalPreferences();
         this.selected = localPreferences.selected;
         this.icons = localPreferences.icons;
+        this.tabOrder = localPreferences.order;
         this.updatedAt = localPreferences.updatedAt;
         this.loadedByName = new Map();
         this.knownNames = new Set();
         this.disabled = new Set();
+        this.activeTabs = [];
         this.listeners = new Set();
         this.tabCache = new Map();
         this.objectIds = new WeakMap();
@@ -8293,26 +8805,34 @@ class ShortcutsRuntime {
         this.preferenceRevision = 0;
         this.started = false;
         this.stopped = false;
-        this.interval = null;
+        this.fallbackInterval = null;
+        this.startupRetries = [];
+        this.refreshScheduled = false;
         this.boundEventBus = null;
+        this.boundHook = null;
+        this.boundLayout = null;
         this.saveChain = Promise.resolve();
         this.onDeckyUpdate = () => this.refresh();
+        this.onLayoutUpdate = () => this.scheduleRefresh();
+        this.onWake = () => this.scheduleRefresh();
         this.onStorage = (event) => {
             if (event.key && event.key !== STORAGE_KEY) return;
             const next = readLocalPreferences();
             if (
                 JSON.stringify(next.selected) === JSON.stringify(this.selected)
                 && JSON.stringify(next.icons) === JSON.stringify(this.icons)
+                && JSON.stringify(next.order) === JSON.stringify(this.tabOrder)
                 && next.updatedAt === this.updatedAt
             ) {
                 return;
             }
             this.selected = next.selected;
             this.icons = next.icons;
+            this.tabOrder = next.order;
             this.updatedAt = next.updatedAt;
             this.preferenceRevision += 1;
             this.queueBackendSave();
-            this.refresh();
+            this.scheduleRefresh();
         };
         this.snapshot = this.createSnapshot();
     }
@@ -8322,19 +8842,42 @@ class ShortcutsRuntime {
         this.started = true;
         this.bindDeckyEvents();
         globalThis.window?.addEventListener?.("storage", this.onStorage);
+        globalThis.window?.addEventListener?.("focus", this.onWake);
+        globalThis.document?.addEventListener?.("visibilitychange", this.onWake);
         this.refresh();
-        this.interval = globalThis.setInterval(() => this.refresh(), 1000);
+        this.startupRetries = STARTUP_RETRY_DELAYS.map((delay) => (
+            globalThis.setTimeout(() => this.scheduleRefresh(), delay)
+        ));
+        this.fallbackInterval = globalThis.setInterval(() => this.scheduleRefresh(), FALLBACK_REFRESH_MS);
         void this.hydratePreferences();
     }
 
     stop() {
         if (this.stopped) return;
         this.stopped = true;
-        if (this.interval !== null) globalThis.clearInterval(this.interval);
+        if (this.fallbackInterval !== null) globalThis.clearInterval(this.fallbackInterval);
+        for (const timeout of this.startupRetries) globalThis.clearTimeout(timeout);
+        this.startupRetries = [];
         this.boundEventBus?.removeEventListener?.("update", this.onDeckyUpdate);
         globalThis.window?.removeEventListener?.("storage", this.onStorage);
-        cleanupOwnedTabs();
+        globalThis.window?.removeEventListener?.("focus", this.onWake);
+        globalThis.document?.removeEventListener?.("visibilitychange", this.onWake);
+        this.boundLayout?.listeners?.delete?.(this.onLayoutUpdate);
+        cleanupOwnedTabs(this.boundHook);
+        this.boundHook = null;
+        this.boundLayout = null;
         this.listeners.clear();
+    }
+
+    scheduleRefresh() {
+        if (this.stopped || this.refreshScheduled) return;
+        this.refreshScheduled = true;
+        const run = () => {
+            this.refreshScheduled = false;
+            this.refresh();
+        };
+        if (typeof globalThis.queueMicrotask === "function") globalThis.queueMicrotask(run);
+        else Promise.resolve().then(run);
     }
 
     subscribe(listener) {
@@ -8349,6 +8892,9 @@ class ShortcutsRuntime {
     add(name) {
         if (!this.loadedByName.has(name) || this.selected.includes(name)) return;
         this.selected = [...this.selected, name];
+        if (this.tabOrder.length > 0 && !this.tabOrder.includes(shortcutTabKey(name))) {
+            this.tabOrder = [...this.tabOrder, shortcutTabKey(name)];
+        }
         this.updatedAt = Date.now();
         this.preferenceRevision += 1;
         this.persistPreferences();
@@ -8362,6 +8908,7 @@ class ShortcutsRuntime {
         const icons = { ...this.icons };
         delete icons[name];
         this.icons = icons;
+        this.tabOrder = this.tabOrder.filter((key) => key !== shortcutTabKey(name));
         this.updatedAt = Date.now();
         this.tabCache.delete(name);
         this.preferenceRevision += 1;
@@ -8369,17 +8916,37 @@ class ShortcutsRuntime {
         this.refresh();
     }
 
-    move(name, direction) {
-        const index = this.selected.indexOf(name);
-        const target = index + direction;
-        if (index < 0 || target < 0 || target >= this.selected.length) return;
-        const next = [...this.selected];
+    moveTab(key, direction) {
+        const visibleKeys = this.activeTabs.map((entry) => entry.key);
+        const visibleIndex = visibleKeys.indexOf(key);
+        const targetKey = visibleKeys[visibleIndex + direction];
+        if (visibleIndex < 0 || !targetKey) return;
+        const next = this.tabOrder.length > 0 ? [...this.tabOrder] : [...visibleKeys];
+        for (const visibleKey of visibleKeys) {
+            if (!next.includes(visibleKey)) next.push(visibleKey);
+        }
+        const index = next.indexOf(key);
+        const target = next.indexOf(targetKey);
+        if (index < 0 || target < 0) return;
         [next[index], next[target]] = [next[target], next[index]];
-        this.selected = next;
+        this.tabOrder = next;
+        const selected = new Set(this.selected);
+        const orderedSelected = next
+            .filter((entry) => entry.startsWith(SHORTCUT_TAB_PREFIX))
+            .map((entry) => entry.slice(SHORTCUT_TAB_PREFIX.length))
+            .filter((name) => selected.has(name));
+        for (const name of this.selected) {
+            if (!orderedSelected.includes(name)) orderedSelected.push(name);
+        }
+        this.selected = orderedSelected;
         this.updatedAt = Date.now();
         this.preferenceRevision += 1;
         this.persistPreferences();
         this.refresh();
+    }
+
+    move(name, direction) {
+        this.moveTab(shortcutTabKey(name), direction);
     }
 
     setIcon(name, icon) {
@@ -8414,6 +8981,7 @@ class ShortcutsRuntime {
         const revision = this.preferenceRevision;
         const localSelected = [...this.selected];
         const localIcons = { ...this.icons };
+        const localOrder = [...this.tabOrder];
         const localUpdatedAt = this.updatedAt;
         try {
             const remote = await loadBackendPreferences();
@@ -8425,26 +8993,29 @@ class ShortcutsRuntime {
             const exists = remote?.exists === true;
             const remoteSelected = normalizeNames(remote?.selected);
             const remoteIcons = normalizeIcons(remote?.icons, remoteSelected);
+            const remoteOrder = normalizeTabOrder(remote?.order);
             const remoteUpdatedAt = Number.isFinite(Number(remote?.updated_at))
                 ? Math.max(0, Number(remote.updated_at))
                 : 0;
             if (exists && remoteUpdatedAt >= localUpdatedAt) {
                 this.selected = remoteSelected;
                 this.icons = remoteIcons;
+                this.tabOrder = remoteOrder;
                 this.updatedAt = remoteUpdatedAt;
             } else {
                 this.selected = localSelected;
                 this.icons = localIcons;
+                this.tabOrder = localOrder;
                 this.updatedAt = localUpdatedAt;
                 this.queueBackendSave();
             }
-            writeLocalPreferences(this.selected, this.icons, this.updatedAt);
+            writeLocalPreferences(this.selected, this.icons, this.tabOrder, this.updatedAt);
             this.refresh();
         } catch {}
     }
 
     persistPreferences() {
-        writeLocalPreferences(this.selected, this.icons, this.updatedAt);
+        writeLocalPreferences(this.selected, this.icons, this.tabOrder, this.updatedAt);
         this.queueBackendSave();
     }
 
@@ -8452,10 +9023,11 @@ class ShortcutsRuntime {
         if (!saveBackendPreferences) return;
         const selected = [...this.selected];
         const icons = { ...this.icons };
+        const order = [...this.tabOrder];
         const updatedAt = this.updatedAt;
         this.saveChain = this.saveChain
             .catch(() => undefined)
-            .then(() => saveBackendPreferences(selected, icons, updatedAt))
+            .then(() => saveBackendPreferences(selected, icons, updatedAt, order))
             .catch(() => undefined);
     }
 
@@ -8532,13 +9104,28 @@ class ShortcutsRuntime {
         return tab;
     }
 
+    orderedSelectedNames() {
+        const selected = new Set(this.selected);
+        const result = [];
+        for (const key of this.tabOrder) {
+            if (!key.startsWith(SHORTCUT_TAB_PREFIX)) continue;
+            const name = key.slice(SHORTCUT_TAB_PREFIX.length);
+            if (!selected.has(name) || result.includes(name)) continue;
+            result.push(name);
+        }
+        for (const name of this.selected) {
+            if (!result.includes(name)) result.push(name);
+        }
+        return result;
+    }
+
     buildOwnedTabs() {
         const hook = hookOf();
         const foreign = hook?.tabs?.filter((tab) => !isOwnedTab(tab)) ?? [];
-        const availableNames = this.selected.filter((name) => this.loadedByName.has(name));
+        const availableNames = this.orderedSelectedNames().filter((name) => this.loadedByName.has(name));
         const ids = allocateTabIds(availableNames, foreign);
         const tabs = [];
-        for (const name of this.selected) {
+        for (const name of this.orderedSelectedNames()) {
             const plugin = this.loadedByName.get(name);
             const id = ids.get(name);
             if (!plugin || id === undefined) continue;
@@ -8551,9 +9138,72 @@ class ShortcutsRuntime {
         return tabs;
     }
 
+    fallbackActiveTabs(hook) {
+        if (!hook) return [];
+        const records = hook.tabs.map((tab) => {
+            const key = registryTabKey(tab);
+            if (!key) return null;
+            const owned = isOwnedTab(tab);
+            const pluginName = owned ? tab[PLUGIN_FIELD] : null;
+            const fallbackName = String(tab.id) === String(DECKY_TAB_ID)
+                ? nativeTabLabel(DECKY_TAB_ID)
+                : tab?.owner === PDC_OWNER || tab?.__pdcOwner === PDC_OWNER
+                    ? "Panel de Control"
+                    : `Decky ${String(tab.id)}`;
+            return {
+                key,
+                kind: owned ? "shortcut" : "decky",
+                name: pluginName || readableElementText(tab.title) || fallbackName,
+                pluginName,
+                icon: tab.icon ?? null,
+                registryTab: tab,
+                source: null,
+                available: true,
+                disabled: false
+            };
+        }).filter(Boolean);
+        const byKey = new Map(records.map((entry) => [entry.key, entry]));
+        const ordered = [];
+        for (const key of this.tabOrder) {
+            const entry = byKey.get(key);
+            if (!entry) continue;
+            ordered.push(entry);
+            byKey.delete(key);
+        }
+        for (const entry of records) {
+            if (byKey.delete(entry.key)) ordered.push(entry);
+        }
+        return ordered;
+    }
+
+    decorateActiveTabs(records) {
+        return records.map((entry) => {
+            if (entry.kind !== "shortcut") return entry;
+            const name = entry.pluginName || entry.name;
+            const plugin = this.loadedByName.get(name);
+            return {
+                ...entry,
+                name,
+                pluginName: name,
+                icon: plugin?.icon ?? entry.icon,
+                iconChoice: this.iconChoice(name),
+                available: Boolean(plugin),
+                disabled: this.disabled.has(name)
+            };
+        });
+    }
+
     refresh() {
         if (this.stopped) return;
         this.bindDeckyEvents();
+        const hook = hookOf();
+        if (this.boundHook && this.boundHook !== hook) {
+            this.boundLayout?.listeners?.delete?.(this.onLayoutUpdate);
+            cleanupOwnedTabs(this.boundHook);
+            this.boundLayout = null;
+            this.tabCache.clear();
+        }
+        this.boundHook = hook;
         let inventory;
         try {
             inventory = readDeckyInventory();
@@ -8567,10 +9217,14 @@ class ShortcutsRuntime {
 
         let result;
         try {
-            result = applyOwnedTabs(this.buildOwnedTabs());
+            result = applyOwnedTabs(this.buildOwnedTabs(), this.tabOrder, this.onLayoutUpdate);
         } catch {
-            result = { status: "failed", applied: [], observed: false, detail: "unexpected_error" };
+            result = { status: "failed", applied: [], observed: false, detail: "unexpected_error", tabs: [] };
         }
+        const state = hook ? renderAdapterState(hook) : null;
+        this.boundLayout = state ? tabLayoutState(state) : null;
+        const tabRecords = result.tabs.length > 0 ? result.tabs : this.fallbackActiveTabs(hook);
+        this.activeTabs = this.decorateActiveTabs(tabRecords);
         this.status = result.status;
         this.detail = result.detail;
         this.applied = result.applied;
@@ -8602,13 +9256,15 @@ class ShortcutsRuntime {
         return {
             selected: [...this.selected],
             icons: { ...this.icons },
+            order: [...this.tabOrder],
+            tabs: [...this.activeTabs],
             entries: this.entries(),
             status: this.status,
             detail: this.detail,
             applied: [...this.applied],
             observed: this.observed,
             language,
-            fingerprint: `${JSON.stringify(this.selected)}|${JSON.stringify(this.icons)}|${this.inventoryFingerprint}|${this.status}|${this.detail}|${JSON.stringify(this.applied)}|${this.observed}|${language}`
+            fingerprint: `${JSON.stringify(this.selected)}|${JSON.stringify(this.icons)}|${JSON.stringify(this.tabOrder)}|${this.activeTabs.map((entry) => `${entry.key}:${entry.name}:${this.objectId(entry.icon)}:${entry.available}:${entry.disabled}`).join("|")}|${this.inventoryFingerprint}|${this.status}|${this.detail}|${JSON.stringify(this.applied)}|${this.observed}|${language}`
         };
     }
 
@@ -8855,12 +9511,38 @@ function StatusCard({ snapshot }) {
     );
 }
 
-function SelectedCard({ entry, index, total, runtime, onChooseIcon }) {
+function ActiveTabCard({ entry, index, total, runtime, onChooseIcon }) {
     const Focusable = DFL.Focusable ?? "div";
     const NameButton = DFL.DialogButton;
+    const customizable = entry.kind === "shortcut" && typeof onChooseIcon === "function";
+    const actions = [
+        {
+            key: "up",
+            icon: h(UpIcon, { size: 18 }),
+            description: text("moveUp"),
+            disabled: index === 0,
+            onClick: () => runtime.moveTab(entry.key, -1)
+        },
+        {
+            key: "down",
+            icon: h(DownIcon, { size: 18 }),
+            description: text("moveDown"),
+            disabled: index === total - 1,
+            onClick: () => runtime.moveTab(entry.key, 1)
+        }
+    ];
+    if (entry.kind === "shortcut") {
+        actions.push({
+            key: "remove",
+            icon: h(TrashIcon, { size: 18 }),
+            description: text("remove"),
+            disabled: false,
+            onClick: () => runtime.remove(entry.pluginName || entry.name)
+        });
+    }
     return h(
         DFL.PanelSectionRow,
-        { key: entry.name },
+        { key: entry.key },
         h(
             "div",
             {
@@ -8885,9 +9567,9 @@ function SelectedCard({ entry, index, total, runtime, onChooseIcon }) {
                 h(
                     NameButton,
                     {
-                        onClick: onChooseIcon,
-                        onOKActionDescription: text("chooseIcon"),
-                        "aria-label": `${text("chooseIcon")}: ${entry.name}`,
+                        onClick: customizable ? onChooseIcon : () => undefined,
+                        onOKActionDescription: customizable ? text("chooseIcon") : entry.name,
+                        "aria-label": customizable ? `${text("chooseIcon")}: ${entry.name}` : entry.name,
                         style: {
                             display: "block",
                             width: "100%",
@@ -8912,9 +9594,13 @@ function SelectedCard({ entry, index, total, runtime, onChooseIcon }) {
                         "flow-children": "row",
                         style: { display: "flex", gap: 8, width: "100%", minWidth: 0 }
                     },
-                    cardActionButton(h(UpIcon, { size: 18 }), text("moveUp"), () => runtime.move(entry.name, -1), index === 0),
-                    cardActionButton(h(DownIcon, { size: 18 }), text("moveDown"), () => runtime.move(entry.name, 1), index === total - 1),
-                    cardActionButton(h(TrashIcon, { size: 18 }), text("remove"), () => runtime.remove(entry.name))
+                    ...actions.map((action) => cardActionButton(
+                        action.icon,
+                        action.description,
+                        action.onClick,
+                        action.disabled,
+                        { key: action.key }
+                    ))
                 )
             )
         )
@@ -9116,18 +9802,13 @@ function ShortcutsSettings({ runtime }) {
     const snapshot = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
     const [pickerName, setPickerName] = React.useState(null);
     const byName = new Map(snapshot.entries.map((entry) => [entry.name, entry]));
-    const selectedEntries = snapshot.selected.map((name) => byName.get(name) ?? {
-        name,
-        icon: null,
-        iconChoice: snapshot.icons?.[name] ?? "original",
-        available: false,
-        disabled: false,
-        selected: true
-    });
+    const activeEntries = snapshot.tabs ?? [];
     const availableEntries = snapshot.entries.filter((entry) => entry.available && !entry.selected);
-    const selectedCount = selectedEntries.length;
-    const totalRows = selectedEntries.length + availableEntries.length;
-    const pickerEntry = pickerName ? byName.get(pickerName) ?? selectedEntries.find((entry) => entry.name === pickerName) : null;
+    const selectedCount = activeEntries.length;
+    const totalRows = activeEntries.length + availableEntries.length;
+    const pickerEntry = pickerName
+        ? byName.get(pickerName) ?? activeEntries.find((entry) => entry.pluginName === pickerName)
+        : null;
 
     React.useEffect(() => {
         if (pickerName && !snapshot.selected.includes(pickerName)) setPickerName(null);
@@ -9144,18 +9825,20 @@ function ShortcutsSettings({ runtime }) {
         h(
             DFL.PanelSection,
             { title: text("selectedTitle") },
-            selectedEntries.length === 0
+            activeEntries.length === 0
                 ? h(EmptyRow, null, text("emptySelected"))
-                : selectedEntries.map((entry, index) => h(SelectedCard, {
-                    key: entry.name,
+                : activeEntries.map((entry, index) => h(ActiveTabCard, {
+                    key: entry.key,
                     entry,
                     index,
-                    total: selectedEntries.length,
+                    total: activeEntries.length,
                     runtime,
                     rowIndex: index,
                     selectedCount,
                     totalRows,
-                    onChooseIcon: () => setPickerName(entry.name)
+                    onChooseIcon: entry.kind === "shortcut"
+                        ? () => setPickerName(entry.pluginName || entry.name)
+                        : null
                 }))
         ),
         h(

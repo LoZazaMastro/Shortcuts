@@ -69,6 +69,7 @@ sharedState.wrapper = function (existingTabs, visible) {
 };
 Object.defineProperty(hook, sharedSymbol, { configurable: true, value: sharedState });
 Object.defineProperty(hook, "render", { configurable: true, writable: true, value: sharedState.wrapper });
+const sharedWrapperBeforeShortcuts = sharedState.wrapper;
 
 const pluginEntry = { name: "Alpha", content: createElement("alpha"), icon: createElement("alpha-icon") };
 const eventBus = new EventTarget();
@@ -128,7 +129,8 @@ assert.deepEqual(rendered.filter((tab) => tab.decky).map((tab) => tab.key), hook
 
 plugin.onDismount();
 assert.equal(hook[sharedSymbol], sharedState);
-assert.equal(hook.render, sharedState.wrapper);
+assert.equal(hook.render, sharedWrapperBeforeShortcuts);
+assert.equal(sharedState.wrapper, sharedWrapperBeforeShortcuts);
 assert.equal(hook.tabs.some((tab) => tab.__shortcutsOwner), false);
 assert.deepEqual(hook.tabs.map((tab) => tab.id), [999, 0x504443]);
 

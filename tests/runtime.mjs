@@ -84,6 +84,12 @@ const deckyState = {
 const hook = new TabsHook([deckyTab]);
 const storage = new LocalStorage();
 storage.setItem("shortcuts:preferences:v1", JSON.stringify({ version: 2, selected: ["Alpha", "Beta"], icons: {} }));
+const intervalDelays = [];
+const realSetInterval = globalThis.setInterval;
+globalThis.setInterval = (callback, delay) => {
+    intervalDelays.push(delay);
+    return realSetInterval(callback, delay);
+};
 
 globalThis.SP_REACT = {
     createElement: element,
@@ -119,6 +125,7 @@ const plugin = pluginModule.default();
 const runtime = plugin.content.props.runtime;
 
 assert.equal(plugin.name, "Shortcuts");
+assert.deepEqual(intervalDelays, [15000]);
 assert.equal(runtime.getSnapshot().language, "it");
 assert.deepEqual(hook.tabs.filter((tab) => tab.__shortcutsOwner).map((tab) => tab.__shortcutsPlugin), ["Alpha", "Beta"]);
 assert.equal(Object.prototype.hasOwnProperty.call(hook, "render"), true);
@@ -126,10 +133,23 @@ runtime.setIcon("Alpha", "star");
 assert.equal(runtime.getSnapshot().icons.Alpha, "star");
 assert.equal(hook.tabs.find((tab) => tab.__shortcutsPlugin === "Alpha").icon.props.id, "star");
 
-const rendered = [{ key: "native", decky: false }];
+const nativeNotifications = { key: 0, decky: false, title: "Notifications", tab: element("notification-icon") };
+const nativeSettings = { key: 4, decky: false, title: "Settings", tab: element("settings-icon") };
+const rendered = [nativeNotifications, nativeSettings];
 hook.render(rendered, true);
+await new Promise((resolve) => setTimeout(resolve, 0));
 assert.deepEqual(rendered.filter((tab) => tab.decky).map((tab) => tab.key), hook.tabs.map((tab) => tab.id));
 assert.equal(new Set(rendered.filter((tab) => tab.decky).map((tab) => tab.key)).size, hook.tabs.length);
+assert.deepEqual(
+    runtime.getSnapshot().tabs.map((tab) => tab.key),
+    ["steam:0", "steam:4", "decky:999", "shortcut:Alpha", "shortcut:Beta"]
+);
+assert.deepEqual(runtime.getSnapshot().tabs.slice(0, 2).map((tab) => tab.name), ["Notifiche", "Impostazioni"]);
+
+runtime.moveTab("steam:4", 1);
+assert.deepEqual(rendered.slice(0, 3), [nativeNotifications, rendered.find((tab) => tab.key === 999), nativeSettings]);
+runtime.moveTab("steam:4", -1);
+assert.deepEqual(rendered.slice(0, 2), [nativeNotifications, nativeSettings]);
 
 runtime.add("Gamma");
 assert.deepEqual(hook.tabs.filter((tab) => tab.__shortcutsOwner).map((tab) => tab.__shortcutsPlugin), ["Alpha", "Beta", "Gamma"]);
@@ -149,8 +169,10 @@ assert.deepEqual(hook.tabs.filter((tab) => tab.__shortcutsOwner).map((tab) => ta
 assert.deepEqual(runtime.getSnapshot().selected, ["Gamma", "Beta"]);
 
 plugin.onDismount();
+globalThis.setInterval = realSetInterval;
 assert.equal(hook.tabs.some((tab) => tab.__shortcutsOwner), false);
 assert.equal(Object.prototype.hasOwnProperty.call(hook, "render"), false);
 assert.deepEqual(rendered.filter((tab) => tab.decky).map((tab) => tab.key), [999]);
+assert.deepEqual(rendered.map((tab) => tab.key), [0, 4, 999]);
 
 console.log("Shortcuts runtime tests passed");

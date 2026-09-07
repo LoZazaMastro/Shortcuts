@@ -53,6 +53,7 @@ const api = {
                 version: 2,
                 selected: ["Beta"],
                 icons: { Beta: "bolt" },
+                order: ["steam:4", "decky:999", "shortcut:Beta"],
                 updated_at: 200,
                 exists: true
             });
@@ -112,10 +113,12 @@ assert.deepEqual(runtime.getSnapshot().selected, ["Alpha"]);
 await new Promise((resolve) => setTimeout(resolve, 0));
 assert.deepEqual(runtime.getSnapshot().selected, ["Beta"]);
 assert.deepEqual(runtime.getSnapshot().icons, { Beta: "bolt" });
+assert.deepEqual(runtime.getSnapshot().order, ["steam:4", "decky:999", "shortcut:Beta"]);
 assert.deepEqual(hook.tabs.filter((tab) => tab.__shortcutsOwner).map((tab) => tab.__shortcutsPlugin), ["Beta"]);
 assert.equal(saves.length, 0);
 assert.deepEqual(JSON.parse(storage.value).selected, ["Beta"]);
 assert.deepEqual(JSON.parse(storage.value).icons, { Beta: "bolt" });
+assert.deepEqual(JSON.parse(storage.value).order, ["steam:4", "decky:999", "shortcut:Beta"]);
 assert.equal(JSON.parse(storage.value).updatedAt, 200);
 
 plugin.onDismount();
