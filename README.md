@@ -46,6 +46,27 @@ Open Shortcuts in Decky and select a compatible plugin from the available list. 
 - [Decky Loader](https://decky.xyz) 3.x.
 - At least one other Decky plugin with a Quick Access Menu panel.
 
+## Playhub QAM integration
+
+Shortcuts 1.3.0 exposes `window[Symbol.for("shortcuts.qam-bridge.v1")]`
+with protocol `1`. Playhub delegates its QAM registration and visibility to this
+runtime instead of installing a second renderer. Registration waits for backend
+settings hydration. Existing settings, including an empty selection, remain
+authoritative; only an unconfigured installation receives the default first tab.
+Hiding Playhub retains its saved tab position and never disables the plugin.
+
+The bridge provides `register({ name: "Playhub", content, icon, title?,
+defaultVisible })`, which resolves to an unregister callback,
+`getVisible("Playhub")`, `setVisible("Playhub", boolean)`, and
+`subscribe(listener)`, which returns an unsubscribe callback. It announces
+availability changes through the `shortcuts:qam-bridge-changed` window event.
+Visibility changes use the existing local cache and serialized atomic backend
+persistence. Registration itself never rewrites an existing configuration.
+
+Without Shortcuts, Playhub can use its own lightweight QAM module. Older
+Shortcuts versions do not implement this bridge and should be updated before
+using the synchronized Playhub toggle.
+
 ## Installation
 
 Install or update Shortcuts from the [Playhub Plugin Store](https://github.com/LoZazaMastro/Playhub), or install it manually:

@@ -4,6 +4,8 @@ const Fragment = React.Fragment;
 
 const PLUGIN_NAME = "Shortcuts";
 const STORAGE_KEY = "shortcuts:preferences:v1";
+const QAM_BRIDGE = Symbol.for("shortcuts.qam-bridge.v1");
+const QAM_BRIDGE_EVENT = "shortcuts:qam-bridge-changed";
 const OWNER = "shortcuts";
 const OWNER_FIELD = "__shortcutsOwner";
 const PLUGIN_FIELD = "__shortcutsPlugin";
@@ -1265,7 +1267,7 @@ function readLocalPreferences() {
         const updatedAt = Number.isFinite(Number(parsed?.updatedAt))
             ? Math.max(0, Number(parsed.updatedAt))
             : 0;
-        return { selected, icons, order, updatedAt };
+        return { selected, icons, order, updatedAt, configured: Array.isArray(parsed) || Array.isArray(parsed?.selected) };
     } catch {
         return { selected: [], icons: {}, order: [], updatedAt: 0 };
     }
@@ -8119,11 +8121,24 @@ function installTabLayout(state) {
         notificationPending: false
     };
     layout.wrapper = function (tabs, visible) {
-        const result = previous.call(this, tabs, visible);
-        if (state.failure) setTabLayoutDetail(layout, `adapter_${state.failure}`);
-        else if (synchronous(result)) reconcileTabLayout(layout, tabs, visible);
-        else setTabLayoutDetail(layout, "async_renderer");
-        return result;
+        restoreDeckyHostProjection(layout.deckyHost, tabs);
+        try {
+            const result = previous.call(this, tabs, visible);
+            if (state.failure) {
+                layout.deckyHost?.release("adapter_failed");
+                setTabLayoutDetail(layout, `adapter_${state.failure}`);
+            } else if (synchronous(result)) {
+                if (reconcileTabLayout(layout, tabs, visible)) projectDeckyHost(layout, tabs, visible);
+                else layout.deckyHost?.release("layout_failed");
+            } else {
+                layout.deckyHost?.release("async_renderer");
+                setTabLayoutDetail(layout, "async_renderer");
+            }
+            return result;
+        } catch (error) {
+            layout.deckyHost?.release("render_error");
+            throw error;
+        }
     };
 
     try {
@@ -8143,6 +8158,7 @@ function installTabLayout(state) {
 
 function detachTabLayout(layout, restore = true) {
     if (!layout) return;
+    layout.deckyHost?.release("layout_detached");
     if (restore) restoreObservedTabLayouts(layout);
     const { state, hook, previous } = layout;
     try {
@@ -8162,6 +8178,139 @@ function setTabLayoutOrder(layout, order) {
     const normalized = normalizeTabOrder(order);
     if (JSON.stringify(normalized) === JSON.stringify(layout.order)) return;
     layout.order = normalized;
+}
+
+// A lease never edits the registry or saved preferences. Restore the canonical
+// array before the shared adapter checks registry identity and cardinality.
+function restoreDeckyHostProjection(lease, onlyTabs = null) {
+    if (!lease) return;
+    for (const record of lease.projections) {
+        const tabs = record.array.deref();
+        if (onlyTabs && tabs && tabs !== onlyTabs) continue;
+        if (tabs && !tabs.some((tab) => String(tab.key) === String(DECKY_TAB_ID))) {
+            tabs.splice(Math.min(record.index, tabs.length), 0, record.tab);
+        }
+        lease.projections.delete(record);
+    }
+}
+
+function deckyHostLayout(runtime) {
+    const hook = hookOf();
+    const state = hook && renderAdapterState(hook);
+    const layout = state && tabLayoutState(state);
+    return !runtime.stopped && runtime.selected.includes("Playhub")
+        && runtime.registrations.has("Playhub") && !state?.failure
+        && layout && runtime.boundLayout === layout ? layout : null;
+}
+
+function projectDeckyHost(layout, tabs, visible) {
+    const lease = layout.deckyHost;
+    if (!lease) return;
+    if (!lease.valid()) { lease.release("host_unavailable"); return; }
+    const activeArray = layout.activeArrayRef?.deref();
+    if (!activeArray || activeArray === tabs) {
+        lease.tab.qAMVisibilitySetter?.(visible === true && lease.active);
+        lease.tab.initialVisibility = visible === true && lease.active;
+        lease.onVisibility(visible === true && lease.active);
+    }
+    if (!lease.ready || !lease.hideNative) return;
+    const element = lease.element;
+    const panel = element.closest('[id^="quickaccess_content_"]');
+    const ownTab = layout.hook.tabs.find((tab) => isOwnedTab(tab) && tab[PLUGIN_FIELD] === "Playhub");
+    const selector = ownTab && `quickaccess_tab_${ownTab.id}`;
+    // Readiness survives horizontal tab changes. Do not remove the currently
+    // selected native Decky tab; wait for a normal QAM navigation instead.
+    if (!ownTab || panel?.id !== `quickaccess_content_${ownTab.id}`
+        || !element.ownerDocument.getElementById(selector)
+        || element.ownerDocument.getElementById(`quickaccess_tab_${DECKY_TAB_ID}`)?.getAttribute("aria-selected") === "true") return;
+    if (!tabs.some((tab) => String(tab.key) === String(ownTab.id))) return;
+    const index = tabs.findIndex((tab) => tab.decky === true && String(tab.key) === String(DECKY_TAB_ID));
+    if (index < 0 || Object.isFrozen(tabs) || Object.isSealed(tabs)) return;
+    const tab = tabs[index];
+    lease.projections.add({ array: new WeakRef(tabs), index, tab });
+    tabs.splice(index, 1);
+}
+
+function acquireDeckyHost(runtime, options) {
+    const layout = deckyHostLayout(runtime);
+    if (!layout || layout.deckyHost || typeof options?.createContent !== "function"
+        || typeof options?.isHealthy !== "function" || !options.element?.isConnected) return null;
+    const entry = layout.hook.tabs.find((tab) => tab.id === DECKY_TAB_ID);
+    if (!entry?.content) return null;
+    const originalContent = entry.content;
+    const registration = runtime.registrations.get("Playhub");
+    let content, generated;
+    try {
+        content = options.createContent(entry.content);
+        if (!content) return null;
+        generated = generateRenderedRegistry(layout.state.original, layout.hook,
+            snapshotTabRegistry([{ ...entry, content }]), false);
+    } catch { return null; }
+    if (!generated || generated.length !== 1) return null;
+    const tab = generated[0];
+    let deadline = Date.now() + 3000;
+    let released = false;
+    const lease = {
+        tab, element: options.element, active: false, ready: false, hideNative: options.hideNative !== false, projections: new Set(),
+        onVisibility(visible) { options.onVisibility?.(visible); },
+        valid() {
+            try {
+                return !released && Date.now() < deadline && deckyHostLayout(runtime) === layout
+                    && runtime.registrations.get("Playhub") === registration
+                    && layout.hook.tabs.find((item) => item.id === DECKY_TAB_ID)?.content === originalContent
+                    && options.element.isConnected && options.isHealthy() === true;
+            } catch { return false; }
+        },
+        release(reason = "released") {
+            if (released) return;
+            restoreDeckyHostProjection(lease);
+            released = true;
+            lease.active = false;
+            lease.ready = false;
+            clearInterval(watchdog);
+            if (layout.deckyHost === lease) delete layout.deckyHost;
+            try { tab.qAMVisibilitySetter?.(false); } catch {}
+            try { lease.onVisibility(false); } catch {}
+            try { options.onRelease?.(reason); } catch {}
+        }
+    };
+    const watchdog = setInterval(() => { if (!lease.valid()) lease.release("lease_expired"); }, 500);
+    layout.deckyHost = lease;
+    return {
+        panel: tab.panel,
+        renew() {
+            if (!lease.valid()) { lease.release("host_unavailable"); return false; }
+            deadline = Date.now() + 3000;
+            return true;
+        },
+        setActive(active) {
+            if (!lease.valid()) { lease.release("host_unavailable"); return false; }
+            lease.active = active === true;
+            try {
+                if (!lease.active) { tab.qAMVisibilitySetter?.(false); lease.onVisibility(false); }
+                if (!refreshObservedQam(layout.state)) { lease.release("refresh_failed"); return false; }
+            }
+            catch { lease.release("refresh_failed"); return false; }
+            return !released;
+        },
+        setReady() {
+            if (!lease.valid()) { lease.release("host_unavailable"); return false; }
+            lease.ready = true;
+            try { if (!refreshObservedQam(layout.state)) lease.release("refresh_failed"); }
+            catch { lease.release("refresh_failed"); }
+            return !released;
+        },
+        setNativeHidden(hidden) {
+            if (!lease.valid()) { lease.release("host_unavailable"); return false; }
+            lease.hideNative = hidden === true;
+            try {
+                if (!lease.hideNative) restoreDeckyHostProjection(lease);
+                if (!refreshObservedQam(layout.state)) { lease.release("refresh_failed"); return false; }
+            } catch { lease.release("refresh_failed"); return false; }
+            return !released;
+        },
+        release: lease.release
+    };
 }
 
 function orderedRegistryTabs(tabs, order) {
@@ -8765,19 +8914,37 @@ function readDeckyInventory() {
 }
 
 function Title({ name }) {
-    return h("div", { className: DFL.staticClasses?.Title }, name);
+    return h("div", { title: String(name), style: {
+        flex: "1 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
+    } }, name);
 }
 
-function ShortcutPanel({ runtime, content }) {
+function ShortcutHeader({ name, titleView, legacyTitle }) {
+    const Focusable = DFL.Focusable ?? "div";
+    const header = titleView || legacyTitle || name;
+    return h(Focusable, {
+        className: DFL.staticClasses?.Title,
+        "data-shortcuts-header": name,
+        "flow-children": "row",
+        style: { display: "flex", alignItems: "center", width: "100%", minWidth: 0,
+            boxSizing: "border-box", paddingRight: 16, position: "sticky", top: 0 }
+    },
+        typeof header === "string" || typeof header === "number" ? h(Title, { name: header }) : header
+    );
+}
+
+function ShortcutPanel({ runtime, name, content, titleView, legacyTitle }) {
     const onVisible = React.useCallback(() => runtime.onShortcutVisible(), [runtime]);
     const Boundary = DFL.ErrorBoundary ?? Fragment;
+    const Focusable = DFL.Focusable ?? "div";
     return h(
         QamPanelGate,
         { onVisible },
         h(
-            Boundary,
-            null,
-            h("div", { style: { height: "100%", paddingTop: "16px" } }, content)
+            Focusable,
+            { "data-shortcuts-panel": name, "flow-children": "column", style: { width: "100%", minWidth: 0 } },
+            h(Boundary, null, h(ShortcutHeader, { name, titleView, legacyTitle })),
+            h(Boundary, null, h("div", { style: { height: "100%", paddingTop: "16px" } }, content))
         )
     );
 }
@@ -8789,6 +8956,49 @@ class ShortcutsRuntime {
         this.icons = localPreferences.icons;
         this.tabOrder = localPreferences.order;
         this.updatedAt = localPreferences.updatedAt;
+        this.configured = localPreferences.configured === true;
+        this.registrations = new Map();
+        this.ready = Promise.resolve();
+        this.bridge = {
+            protocol: 1,
+            deckyHost: {
+                protocol: 1,
+                isAvailable: () => Boolean(deckyHostLayout(this)),
+                acquire: (options) => acquireDeckyHost(this, options)
+            },
+            register: async (entry) => {
+                await this.ready;
+                if (this.stopped || entry?.name !== "Playhub" || entry.content == null) return () => {};
+                const token = {};
+                this.registrations.set(entry.name, { ...entry, token });
+                if (!this.configured) {
+                    this.configured = true;
+                    if (entry.defaultVisible !== false) {
+                        this.selected = [entry.name, ...this.selected.filter((name) => name !== entry.name)];
+                        this.tabOrder = [shortcutTabKey(entry.name), ...this.tabOrder.filter((key) => key !== shortcutTabKey(entry.name))];
+                    }
+                    this.updatedAt = Date.now();
+                    this.preferenceRevision += 1;
+                    this.persistPreferences();
+                }
+                this.refresh();
+                return () => {
+                    if (this.registrations.get(entry.name)?.token !== token) return;
+                    this.registrations.delete(entry.name);
+                    this.refresh();
+                };
+            },
+            getVisible: (name) => this.selected.includes(name),
+            setVisible: async (name, visible) => {
+                await this.ready;
+                if (this.stopped || name !== "Playhub") return;
+                this.configured = true;
+                if (visible) this.add(name);
+                else this.remove(name);
+                await this.saveChain;
+            },
+            subscribe: (listener) => this.subscribe(listener)
+        };
         this.loadedByName = new Map();
         this.knownNames = new Set();
         this.disabled = new Set();
@@ -8818,8 +9028,11 @@ class ShortcutsRuntime {
         this.onStorage = (event) => {
             if (event.key && event.key !== STORAGE_KEY) return;
             const next = readLocalPreferences();
+            const configurationChanged = !this.configured && next.configured === true;
+            this.configured = this.configured || next.configured === true;
             if (
-                JSON.stringify(next.selected) === JSON.stringify(this.selected)
+                !configurationChanged
+                && JSON.stringify(next.selected) === JSON.stringify(this.selected)
                 && JSON.stringify(next.icons) === JSON.stringify(this.icons)
                 && JSON.stringify(next.order) === JSON.stringify(this.tabOrder)
                 && next.updatedAt === this.updatedAt
@@ -8840,6 +9053,9 @@ class ShortcutsRuntime {
     start() {
         if (this.started) return;
         this.started = true;
+        this.ready = this.hydratePreferences();
+        globalThis.window[QAM_BRIDGE] = this.bridge;
+        globalThis.window?.dispatchEvent?.(new Event(QAM_BRIDGE_EVENT));
         this.bindDeckyEvents();
         globalThis.window?.addEventListener?.("storage", this.onStorage);
         globalThis.window?.addEventListener?.("focus", this.onWake);
@@ -8849,11 +9065,11 @@ class ShortcutsRuntime {
             globalThis.setTimeout(() => this.scheduleRefresh(), delay)
         ));
         this.fallbackInterval = globalThis.setInterval(() => this.scheduleRefresh(), FALLBACK_REFRESH_MS);
-        void this.hydratePreferences();
     }
 
     stop() {
         if (this.stopped) return;
+        this.boundLayout?.deckyHost?.release("shortcuts_unloaded");
         this.stopped = true;
         if (this.fallbackInterval !== null) globalThis.clearInterval(this.fallbackInterval);
         for (const timeout of this.startupRetries) globalThis.clearTimeout(timeout);
@@ -8867,6 +9083,10 @@ class ShortcutsRuntime {
         this.boundHook = null;
         this.boundLayout = null;
         this.listeners.clear();
+        if (globalThis.window?.[QAM_BRIDGE] === this.bridge) {
+            delete globalThis.window[QAM_BRIDGE];
+            globalThis.window?.dispatchEvent?.(new Event(QAM_BRIDGE_EVENT));
+        }
     }
 
     scheduleRefresh() {
@@ -8908,7 +9128,7 @@ class ShortcutsRuntime {
         const icons = { ...this.icons };
         delete icons[name];
         this.icons = icons;
-        this.tabOrder = this.tabOrder.filter((key) => key !== shortcutTabKey(name));
+        if (name !== "Playhub") this.tabOrder = this.tabOrder.filter((key) => key !== shortcutTabKey(name));
         this.updatedAt = Date.now();
         this.tabCache.delete(name);
         this.preferenceRevision += 1;
@@ -8991,6 +9211,7 @@ class ShortcutsRuntime {
                 return;
             }
             const exists = remote?.exists === true;
+            this.configured = this.configured || exists;
             const remoteSelected = normalizeNames(remote?.selected);
             const remoteIcons = normalizeIcons(remote?.icons, remoteSelected);
             const remoteOrder = normalizeTabOrder(remote?.order);
@@ -9011,10 +9232,14 @@ class ShortcutsRuntime {
             }
             writeLocalPreferences(this.selected, this.icons, this.tabOrder, this.updatedAt);
             this.refresh();
-        } catch {}
+        } catch {
+            // A failed read must never turn a hidden tab back on by default.
+            this.configured = true;
+        }
     }
 
     persistPreferences() {
+        this.configured = true;
         writeLocalPreferences(this.selected, this.icons, this.tabOrder, this.updatedAt);
         this.queueBackendSave();
     }
@@ -9060,7 +9285,8 @@ class ShortcutsRuntime {
                 plugin.version ?? "",
                 this.objectId(plugin.content),
                 this.objectId(plugin.icon),
-                this.objectId(plugin.titleView)
+                this.objectId(plugin.titleView),
+                this.objectId(plugin.title)
             ].join(":"));
         const known = [...this.knownNames].sort().join("|");
         const disabled = [...this.disabled].sort().join("|");
@@ -9076,18 +9302,19 @@ class ShortcutsRuntime {
             && cached.content === plugin.content
             && cached.pluginIcon === plugin.icon
             && cached.titleView === plugin.titleView
+            && cached.legacyTitle === plugin.title
             && cached.iconChoice === iconChoice
         ) {
             return cached.tab;
         }
-        const title = plugin.titleView ?? h(Title, { name });
         const icon = iconChoice === "original"
             ? plugin.icon ?? h(ShortcutsIcon, null)
             : h(CustomIcon, { id: iconChoice });
-        const content = h(ShortcutPanel, { runtime: this, content: plugin.content });
+        const content = h(ShortcutPanel, { runtime: this, name, content: plugin.content,
+            titleView: plugin.titleView, legacyTitle: plugin.title });
         const tab = {
             id,
-            title,
+            title: null,
             content,
             icon,
             [OWNER_FIELD]: OWNER,
@@ -9098,6 +9325,7 @@ class ShortcutsRuntime {
             content: plugin.content,
             pluginIcon: plugin.icon,
             titleView: plugin.titleView,
+            legacyTitle: plugin.title,
             iconChoice,
             tab
         });
@@ -9195,6 +9423,9 @@ class ShortcutsRuntime {
 
     refresh() {
         if (this.stopped) return;
+        if (this.boundLayout?.deckyHost && !this.boundLayout.deckyHost.valid()) {
+            this.boundLayout.deckyHost.release("host_unavailable");
+        }
         this.bindDeckyEvents();
         const hook = hookOf();
         if (this.boundHook && this.boundHook !== hook) {
@@ -9213,6 +9444,10 @@ class ShortcutsRuntime {
         this.loadedByName = inventory.loadedByName;
         this.knownNames = inventory.knownNames;
         this.disabled = inventory.disabled;
+        for (const [name, entry] of this.registrations) {
+            this.loadedByName.set(name, { ...entry, titleView: entry.title });
+            this.knownNames.add(name);
+        }
         this.inventoryFingerprint = this.inventorySignature();
 
         let result;
@@ -9423,6 +9658,7 @@ function PluginIdentity({ entry, muted = false, useSelectedIcon = false }) {
         h(
             "div",
             {
+                className: "shortcuts-identity-icon",
                 style: {
                     width: 26,
                     height: 26,
@@ -9433,6 +9669,10 @@ function PluginIdentity({ entry, muted = false, useSelectedIcon = false }) {
                     overflow: "hidden"
                 }
             },
+            h("style", null, `.shortcuts-identity-icon svg, .shortcuts-identity-icon img {
+                display:block; width:100% !important; height:100% !important;
+                max-width:100%; max-height:100%; object-fit:contain;
+            }`),
             useSelectedIcon ? entryIcon(entry, 22) : entry.icon ?? h(MissingIcon, { size: 22 })
         ),
         h(
