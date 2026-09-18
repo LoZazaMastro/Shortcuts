@@ -36,12 +36,14 @@ async def run():
             },
             123456,
             ["steam:0", "shortcut:Alpha", "decky:999", "steam:0", "steam:", "invalid"],
+            ["steam:0", "steam:0", "decky:999", "invalid"],
         )
         assert saved == {
             "version": 3,
             "selected": ["Alpha", "Beta"],
             "icons": {"Alpha": "brand-discord-outline", "Beta": "circle-letter-a"},
             "order": ["steam:0", "shortcut:Alpha", "decky:999"],
+            "hidden": ["steam:0"],
             "updated_at": 123456,
             "exists": True,
         }

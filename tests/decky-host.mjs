@@ -57,8 +57,12 @@ async function fixture() {
       (key === "quickaccess_tab_999" ? !selected : selected) ? "true" : "false" }) } };
   const arrays = [[{ key: 4 }], [{ key: 4 }]];
   arrays.forEach((tabs, index) => hook.render(tabs, index === 0));
+  const projections = arrays.map(tabs => ({ snapshot: [...tabs], pending: false, listeners: new Set() }));
+  host[Symbol.for("playhub.decky-tab-projections.v1")] = {
+    version: 1, arrays: new WeakMap(arrays.map((tabs, index) => [tabs, projections[index]]))
+  };
   const acquire = (extra = {}) => bridge.deckyHost.acquire({ element, createContent: root => ({ ...root, scoped: true }), isHealthy: () => true, ...extra });
-  return { plugin, runtime, bridge, hook, arrays, element, saved, acquire, releaseRegistration,
+  return { plugin, runtime, bridge, hook, arrays, projections, element, saved, acquire, releaseRegistration,
     select: value => { selected = value; },
     advance: ms => { time += ms; [...timers.values()].forEach(callback => callback()); } };
 }
@@ -81,10 +85,16 @@ for (let i = 0; i < 8; i++) f.arrays.forEach((tabs, index) => f.hook.render(tabs
 await new Promise(resolve => setImmediate(resolve));
 assert.equal(f.arrays[0].some(tab => tab.key === 999), false);
 assert.equal(f.arrays[1].some(tab => tab.key === 999), false);
+assert.ok(f.projections.every(state => !state.snapshot.some(tab => tab.key === 999)), "retained React views hide Decky too");
+f.runtime.toggleNativeTab("steam:4");
+assert.ok(f.projections.every(state => !state.snapshot.some(tab => tab.key === 4)), "retained React views hide Steam tabs too");
+f.runtime.toggleNativeTab("steam:4");
+assert.ok(f.projections.every(state => state.snapshot.some(tab => tab.key === 4)), "native tabs can be restored without navigation");
 assert.equal(f.runtime.status, "active");
 assert.equal(lease.setNativeHidden(false), true);
 for (let i = 0; i < 5; i++) f.arrays.forEach(tabs => f.hook.render(tabs, true));
 assert.ok(f.arrays.every(tabs => tabs.filter(tab => tab.key === 999).length === 1));
+assert.ok(f.projections.every(state => state.snapshot.filter(tab => tab.key === 999).length === 1));
 assert.equal(lease.renew(), true, "showing native Decky must retain the host lease");
 assert.equal(lease.setNativeHidden(true), true);
 assert.ok(f.arrays.every(tabs => !tabs.some(tab => tab.key === 999)));

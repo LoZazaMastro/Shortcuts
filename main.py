@@ -25,13 +25,14 @@ class Plugin:
         async with self._lock:
             return await asyncio.to_thread(self._read_state)
 
-    async def save_state(self, selected, icons=None, updated_at=0, order=None):
+    async def save_state(self, selected, icons=None, updated_at=0, order=None, hidden=None):
         if isinstance(icons, (int, float)) and updated_at == 0:
             updated_at = icons
             icons = {}
         normalized = self._normalize(selected)
         normalized_icons = self._normalize_icons(icons, normalized)
         normalized_order = self._normalize_order(order)
+        normalized_hidden = [key for key in self._normalize_order(hidden) if key.startswith("steam:")]
         timestamp = self._normalize_timestamp(updated_at)
         async with self._lock:
             await asyncio.to_thread(
@@ -40,12 +41,14 @@ class Plugin:
                 normalized_icons,
                 normalized_order,
                 timestamp,
+                normalized_hidden,
             )
         return {
             "version": STATE_VERSION,
             "selected": normalized,
             "icons": normalized_icons,
             "order": normalized_order,
+            "hidden": normalized_hidden,
             "updated_at": timestamp,
             "exists": True,
         }
@@ -71,6 +74,7 @@ class Plugin:
                 "selected": selected,
                 "icons": self._normalize_icons(data.get("icons", {}), selected),
                 "order": self._normalize_order(data.get("order", [])),
+                "hidden": [key for key in self._normalize_order(data.get("hidden", [])) if key.startswith("steam:")],
                 "updated_at": self._normalize_timestamp(data.get("updated_at", 0), False),
             }
         except (OSError, ValueError, TypeError, AttributeError):
@@ -94,7 +98,7 @@ class Plugin:
             os.fsync(handle.fileno())
         os.replace(temporary, path)
 
-    def _write_state(self, selected, icons, order, updated_at):
+    def _write_state(self, selected, icons, order, updated_at, hidden=None):
         previous = self._read_state_file(self._path)
         if previous is not None:
             self._write_json_atomic(self._backup_path, previous)
@@ -103,6 +107,7 @@ class Plugin:
             "selected": selected,
             "icons": icons,
             "order": order,
+            "hidden": hidden or [],
             "updated_at": updated_at,
         }
         self._write_json_atomic(self._path, payload)

@@ -1267,17 +1267,17 @@ function readLocalPreferences() {
         const updatedAt = Number.isFinite(Number(parsed?.updatedAt))
             ? Math.max(0, Number(parsed.updatedAt))
             : 0;
-        return { selected, icons, order, updatedAt, configured: Array.isArray(parsed) || Array.isArray(parsed?.selected) };
+        return { selected, icons, order, hidden: normalizeTabOrder(parsed?.hidden).filter(key => key.startsWith(STEAM_TAB_PREFIX)), updatedAt, configured: Array.isArray(parsed) || Array.isArray(parsed?.selected) };
     } catch {
         return { selected: [], icons: {}, order: [], updatedAt: 0 };
     }
 }
 
-function writeLocalPreferences(selected, icons, order, updatedAt) {
+function writeLocalPreferences(selected, icons, order, updatedAt, hidden = []) {
     try {
         globalThis.localStorage?.setItem(
             STORAGE_KEY,
-            JSON.stringify({ version: STATE_VERSION, selected, icons, order, updatedAt })
+            JSON.stringify({ version: STATE_VERSION, selected, icons, order, updatedAt, hidden })
         );
     } catch {}
 }
@@ -7999,11 +7999,34 @@ function setTabLayoutDetail(layout, detail) {
     return true;
 }
 
+// Playhub retains subscribed copies of the tab array. Publish only the final
+// projection, after both native visibility and the Decky host lease are applied.
+function publishSharedTabProjection(tabs) {
+    const host = typeof window === "undefined" ? globalThis : window;
+    const registry = host[Symbol.for("playhub.decky-tab-projections.v1")];
+    if (registry?.version !== 1) return;
+    const projection = registry.arrays?.get(tabs);
+    if (!projection || sameTabSequence(projection.snapshot, tabs)) return;
+    projection.snapshot = [...tabs];
+    if (projection.pending) return;
+    projection.pending = true;
+    Promise.resolve().then(() => {
+        projection.pending = false;
+        for (const listener of projection.listeners) listener();
+    });
+}
+
 function reconcileTabLayout(layout, tabs, visible = false) {
     if (!Array.isArray(tabs)) return false;
     if (!layout.baselines.has(tabs)) layout.baselines.set(tabs, [...tabs]);
-
-    const records = tabs.map((tab) => renderedTabRecord(layout.hook, tab));
+    const completeTabs = [...tabs];
+    for (const tab of layout.hiddenSources.get(tabs) ?? []) {
+        if (completeTabs.some(entry => entry.decky === tab.decky && entry.key === tab.key)) continue;
+        const baseline = layout.baselines.get(tabs);
+        const next = baseline.slice(baseline.indexOf(tab) + 1).find(entry => completeTabs.includes(entry));
+        completeTabs.splice(next ? completeTabs.indexOf(next) : completeTabs.length, 0, tab);
+    }
+    const records = completeTabs.map((tab) => renderedTabRecord(layout.hook, tab));
     if (records.some((record) => !record)) {
         setTabLayoutDetail(layout, "unrecognized_tab_shape");
         return false;
@@ -8026,7 +8049,8 @@ function reconcileTabLayout(layout, tabs, visible = false) {
         included.add(record.key);
         desiredKeys.push(record.key);
     }
-    const desiredTabs = desiredKeys.map((key) => recordByKey.get(key).source);
+    const desiredTabs = desiredKeys.filter(key => !layout.hidden.has(key)).map((key) => recordByKey.get(key).source);
+    layout.hiddenSources.set(tabs, records.filter(record => layout.hidden.has(record.key)).map(record => record.source));
     const changed = !sameTabSequence(tabs, desiredTabs);
     if (changed) {
         const before = [...tabs];
@@ -8075,7 +8099,7 @@ function restoreObservedTabLayouts(layout) {
         const tabs = reference?.deref?.();
         const baseline = tabs ? layout.baselines.get(tabs) : null;
         if (!tabs || !baseline) continue;
-        const current = new Set(tabs);
+        const current = new Set([...tabs, ...(layout.hiddenSources.get(tabs) ?? [])]);
         const restored = baseline.filter((tab) => current.has(tab));
         for (const tab of tabs) {
             if (!restored.includes(tab)) restored.push(tab);
@@ -8085,6 +8109,7 @@ function restoreObservedTabLayouts(layout) {
                 tabs.splice(0, tabs.length, ...restored);
             } catch {}
         }
+        publishSharedTabProjection(tabs);
     }
 }
 
@@ -8111,6 +8136,8 @@ function installTabLayout(state) {
         previous,
         wrapper: null,
         order: [],
+        hidden: new Set(),
+        hiddenSources: new WeakMap(),
         records: [],
         detail: "waiting_for_render",
         listeners: new Set(),
@@ -8128,7 +8155,10 @@ function installTabLayout(state) {
                 layout.deckyHost?.release("adapter_failed");
                 setTabLayoutDetail(layout, `adapter_${state.failure}`);
             } else if (synchronous(result)) {
-                if (reconcileTabLayout(layout, tabs, visible)) projectDeckyHost(layout, tabs, visible);
+                if (reconcileTabLayout(layout, tabs, visible)) {
+                    projectDeckyHost(layout, tabs, visible);
+                    publishSharedTabProjection(tabs);
+                }
                 else layout.deckyHost?.release("layout_failed");
             } else {
                 layout.deckyHost?.release("async_renderer");
@@ -8190,6 +8220,7 @@ function restoreDeckyHostProjection(lease, onlyTabs = null) {
         if (tabs && !tabs.some((tab) => String(tab.key) === String(DECKY_TAB_ID))) {
             tabs.splice(Math.min(record.index, tabs.length), 0, record.tab);
         }
+        if (tabs && !onlyTabs) publishSharedTabProjection(tabs);
         lease.projections.delete(record);
     }
 }
@@ -8700,7 +8731,7 @@ function ownedPluginNames(tabs) {
         .filter((name) => typeof name === "string");
 }
 
-function applyOwnedTabs(ownedTabs, order = [], onLayoutChange = null) {
+function applyOwnedTabs(ownedTabs, order = [], onLayoutChange = null, hidden = []) {
     const hook = hookOf();
     if (!hook) {
         return { status: "waiting", applied: [], observed: false, detail: "hook_unavailable", tabs: [] };
@@ -8745,6 +8776,7 @@ function applyOwnedTabs(ownedTabs, order = [], onLayoutChange = null) {
         };
     }
     if (typeof onLayoutChange === "function") layout.listeners.add(onLayoutChange);
+    layout.hidden = new Set(hidden);
     setTabLayoutOrder(layout, order);
 
     if (!sameTabSequence(current, desired)) {
@@ -8955,6 +8987,7 @@ class ShortcutsRuntime {
         this.selected = localPreferences.selected;
         this.icons = localPreferences.icons;
         this.tabOrder = localPreferences.order;
+        this.hiddenTabs = localPreferences.hidden ?? [];
         this.updatedAt = localPreferences.updatedAt;
         this.configured = localPreferences.configured === true;
         this.registrations = new Map();
@@ -9035,6 +9068,7 @@ class ShortcutsRuntime {
                 && JSON.stringify(next.selected) === JSON.stringify(this.selected)
                 && JSON.stringify(next.icons) === JSON.stringify(this.icons)
                 && JSON.stringify(next.order) === JSON.stringify(this.tabOrder)
+                && JSON.stringify(next.hidden ?? []) === JSON.stringify(this.hiddenTabs)
                 && next.updatedAt === this.updatedAt
             ) {
                 return;
@@ -9042,6 +9076,7 @@ class ShortcutsRuntime {
             this.selected = next.selected;
             this.icons = next.icons;
             this.tabOrder = next.order;
+            this.hiddenTabs = next.hidden ?? [];
             this.updatedAt = next.updatedAt;
             this.preferenceRevision += 1;
             this.queueBackendSave();
@@ -9169,6 +9204,17 @@ class ShortcutsRuntime {
         this.moveTab(shortcutTabKey(name), direction);
     }
 
+    toggleNativeTab(key) {
+        if (!key.startsWith(STEAM_TAB_PREFIX)) return;
+        this.hiddenTabs = this.hiddenTabs.includes(key)
+            ? this.hiddenTabs.filter(entry => entry !== key)
+            : [...this.hiddenTabs, key];
+        this.updatedAt = Date.now();
+        this.preferenceRevision += 1;
+        this.persistPreferences();
+        this.refresh();
+    }
+
     setIcon(name, icon) {
         if (!this.selected.includes(name) || !VALID_ICON_IDS.has(icon)) return;
         const resolvedIcon = ICON_ALIASES[icon] ?? icon;
@@ -9222,6 +9268,7 @@ class ShortcutsRuntime {
                 this.selected = remoteSelected;
                 this.icons = remoteIcons;
                 this.tabOrder = remoteOrder;
+                this.hiddenTabs = normalizeTabOrder(remote?.hidden).filter(key => key.startsWith(STEAM_TAB_PREFIX));
                 this.updatedAt = remoteUpdatedAt;
             } else {
                 this.selected = localSelected;
@@ -9230,7 +9277,7 @@ class ShortcutsRuntime {
                 this.updatedAt = localUpdatedAt;
                 this.queueBackendSave();
             }
-            writeLocalPreferences(this.selected, this.icons, this.tabOrder, this.updatedAt);
+            writeLocalPreferences(this.selected, this.icons, this.tabOrder, this.updatedAt, this.hiddenTabs);
             this.refresh();
         } catch {
             // A failed read must never turn a hidden tab back on by default.
@@ -9240,7 +9287,7 @@ class ShortcutsRuntime {
 
     persistPreferences() {
         this.configured = true;
-        writeLocalPreferences(this.selected, this.icons, this.tabOrder, this.updatedAt);
+        writeLocalPreferences(this.selected, this.icons, this.tabOrder, this.updatedAt, this.hiddenTabs);
         this.queueBackendSave();
     }
 
@@ -9249,10 +9296,11 @@ class ShortcutsRuntime {
         const selected = [...this.selected];
         const icons = { ...this.icons };
         const order = [...this.tabOrder];
+        const hidden = [...this.hiddenTabs];
         const updatedAt = this.updatedAt;
         this.saveChain = this.saveChain
             .catch(() => undefined)
-            .then(() => saveBackendPreferences(selected, icons, updatedAt, order))
+            .then(() => saveBackendPreferences(selected, icons, updatedAt, order, hidden))
             .catch(() => undefined);
     }
 
@@ -9406,7 +9454,7 @@ class ShortcutsRuntime {
 
     decorateActiveTabs(records) {
         return records.map((entry) => {
-            if (entry.kind !== "shortcut") return entry;
+            if (entry.kind !== "shortcut") return { ...entry, hidden: this.hiddenTabs.includes(entry.key) };
             const name = entry.pluginName || entry.name;
             const plugin = this.loadedByName.get(name);
             return {
@@ -9452,7 +9500,7 @@ class ShortcutsRuntime {
 
         let result;
         try {
-            result = applyOwnedTabs(this.buildOwnedTabs(), this.tabOrder, this.onLayoutUpdate);
+            result = applyOwnedTabs(this.buildOwnedTabs(), this.tabOrder, this.onLayoutUpdate, this.hiddenTabs);
         } catch {
             result = { status: "failed", applied: [], observed: false, detail: "unexpected_error", tabs: [] };
         }
@@ -9492,6 +9540,7 @@ class ShortcutsRuntime {
             selected: [...this.selected],
             icons: { ...this.icons },
             order: [...this.tabOrder],
+            hidden: [...this.hiddenTabs],
             tabs: [...this.activeTabs],
             entries: this.entries(),
             status: this.status,
@@ -9499,7 +9548,7 @@ class ShortcutsRuntime {
             applied: [...this.applied],
             observed: this.observed,
             language,
-            fingerprint: `${JSON.stringify(this.selected)}|${JSON.stringify(this.icons)}|${JSON.stringify(this.tabOrder)}|${this.activeTabs.map((entry) => `${entry.key}:${entry.name}:${this.objectId(entry.icon)}:${entry.available}:${entry.disabled}`).join("|")}|${this.inventoryFingerprint}|${this.status}|${this.detail}|${JSON.stringify(this.applied)}|${this.observed}|${language}`
+            fingerprint: `${JSON.stringify(this.hiddenTabs)}|${JSON.stringify(this.selected)}|${JSON.stringify(this.icons)}|${JSON.stringify(this.tabOrder)}|${this.activeTabs.map((entry) => `${entry.key}:${entry.name}:${this.objectId(entry.icon)}:${entry.available}:${entry.disabled}`).join("|")}|${this.inventoryFingerprint}|${this.status}|${this.detail}|${JSON.stringify(this.applied)}|${this.observed}|${language}`
         };
     }
 
@@ -9771,6 +9820,15 @@ function ActiveTabCard({ entry, index, total, runtime, onChooseIcon }) {
             onClick: () => runtime.moveTab(entry.key, 1)
         }
     ];
+    if (entry.kind === "steam") {
+        actions.push({
+            key: "visibility",
+            icon: h(CustomIcon, { id: entry.hidden ? "eye-off-outline" : "eye", size: 18 }),
+            description: text(entry.hidden ? "add" : "remove"),
+            disabled: false,
+            onClick: () => runtime.toggleNativeTab(entry.key)
+        });
+    }
     if (entry.kind === "shortcut") {
         actions.push({
             key: "remove",

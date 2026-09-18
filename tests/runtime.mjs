@@ -150,6 +150,17 @@ runtime.moveTab("steam:4", 1);
 assert.deepEqual(rendered.slice(0, 3), [nativeNotifications, rendered.find((tab) => tab.key === 999), nativeSettings]);
 runtime.moveTab("steam:4", -1);
 assert.deepEqual(rendered.slice(0, 2), [nativeNotifications, nativeSettings]);
+runtime.toggleNativeTab("steam:0");
+assert.equal(rendered.includes(nativeNotifications), false);
+assert.equal(runtime.getSnapshot().tabs.find(tab => tab.key === "steam:0").hidden, true);
+hook.render(rendered, true);
+assert.equal(rendered.includes(nativeNotifications), false);
+const reopened = [nativeNotifications, nativeSettings];
+hook.render(reopened, true);
+assert.equal(reopened.includes(nativeNotifications), false);
+runtime.toggleNativeTab("steam:0");
+assert.equal(rendered.includes(nativeNotifications), true);
+assert.equal(reopened.includes(nativeNotifications), true);
 
 runtime.add("Gamma");
 assert.deepEqual(hook.tabs.filter((tab) => tab.__shortcutsOwner).map((tab) => tab.__shortcutsPlugin), ["Alpha", "Beta", "Gamma"]);
@@ -168,6 +179,7 @@ eventBus.dispatchEvent(new Event("update"));
 assert.deepEqual(hook.tabs.filter((tab) => tab.__shortcutsOwner).map((tab) => tab.__shortcutsPlugin), ["Beta"]);
 assert.deepEqual(runtime.getSnapshot().selected, ["Gamma", "Beta"]);
 
+runtime.toggleNativeTab("steam:0");
 plugin.onDismount();
 globalThis.setInterval = realSetInterval;
 assert.equal(hook.tabs.some((tab) => tab.__shortcutsOwner), false);

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.2 - 2026-09-08
+
+- Fixed retained Playhub QAM views not updating when hiding or showing Steam tabs and the native Decky tab.
+- Restored hiding and showing native Steam QAM tabs from the tab editor.
+- Saved native-tab visibility across restarts, keeping hidden tabs available in the editor.
+- Restored native tabs when unloading Shortcuts, without changing Decky hosting preferences.
+
 ## 1.2.0 - 2026-09-07
 
 - Added one controller-friendly list for reordering Steam's native tabs, Decky's tab, compatible custom tabs and plugin shortcuts.
